@@ -16,7 +16,7 @@ class AnswerResponse(BaseModel):
 
 def create_app(model_uri: str) -> FastAPI:
     """
-    创建 FastAPI 应用，并加载 MLflow 模型。
+    Create a FastAPI application and load the MLflow model.
     """
     app = FastAPI(title="ME Engineering Assistant API")
 

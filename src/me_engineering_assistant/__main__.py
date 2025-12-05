@@ -7,9 +7,9 @@ from .api import create_app
 
 def main() -> None:
     """
-    作为命令行入口：
-    - 读取环境变量 MODEL_URI（MLflow 模型地址）
-    - 启动 FastAPI + Uvicorn
+    As a command-line entry point:
+    - Read the environment variable MODEL_URI (MLflow model URL)
+    - Launch FastAPI + Uvicorn
     """
     model_uri = os.environ.get(
         "MODEL_URI",

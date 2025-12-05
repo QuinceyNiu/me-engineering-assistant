@@ -14,12 +14,12 @@ class AgentState(TypedDict):
     metadata: Dict
 
 
-# 在模块加载时构建一次向量库（小数据场景足够）
+# Build the vector library once during module loading (sufficient for small data scenarios)
 VECTORSTORES = build_vectorstores()
 
 
 def router_node(state: AgentState) -> AgentState:
-    """LangGraph 节点：根据问题做路由。"""
+    """LangGraph Node: Route based on the query."""
     decision = route_question(state["question"])
     state["routes"] = decision["routes"]
     state.setdefault("metadata", {})
@@ -28,7 +28,7 @@ def router_node(state: AgentState) -> AgentState:
 
 
 def rag_node(state: AgentState) -> AgentState:
-    """LangGraph 节点：根据路由做 RAG，生成回答。"""
+    """LangGraph Node: Performs RAG based on routing to generate responses."""
     routes = state.get("routes") or list(VECTORSTORES.keys())
     answer = rag_answer(state["question"], VECTORSTORES, routes)
     state["answer"] = answer
@@ -36,7 +36,7 @@ def rag_node(state: AgentState) -> AgentState:
 
 
 def build_agent_graph():
-    """构建 LangGraph workflow。"""
+    """Build the LangGraph workflow."""
     graph = StateGraph(AgentState)
 
     graph.add_node("router", router_node)
@@ -51,11 +51,12 @@ def build_agent_graph():
 
 def run_agent(question: str) -> Dict:
     """
-    对外暴露的简易接口：给一个问题，返回最终 state。
-    state 包含：
-    - "answer": 最终回答
-    - "routes": 使用了哪些文档集合
-    - "metadata": 例如路由原因
+    Exposed Simple Interface:
+    Given a query, return the final state.
+    The state contains:
+    - “answer”: The final response
+    - “routes”: Which document collections were used
+    - “metadata”: Such as routing reasons
     """
     workflow = build_agent_graph()
     final_state: AgentState = workflow.invoke(

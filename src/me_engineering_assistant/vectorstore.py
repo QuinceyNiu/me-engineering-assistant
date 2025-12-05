@@ -16,7 +16,7 @@ from .data_loader import load_markdown, make_chunks
 
 
 def _build_collection(docs: List[dict], embeddings) -> Chroma:
-    """用文档列表构建一个 Chroma 向量库。"""
+    """Build a Chroma vector library using a document list."""
     return Chroma.from_documents(
         [
             Document(
@@ -31,11 +31,11 @@ def _build_collection(docs: List[dict], embeddings) -> Chroma:
 
 def build_vectorstores() -> Dict[str, Chroma]:
     """
-    构建三个向量库，对应：
+    Construct three vector libraries corresponding to:
     - ECU-700
     - ECU-800-base
     - ECU-800-plus
-    返回一个 dict，key 为路由名。
+    Return a dictionary where keys are route names.
     """
     embeddings = HuggingFaceEmbeddings(model_name=EMBEDDING_MODEL_NAME)
 

@@ -7,14 +7,14 @@ from .mlflow_model import MEEngineeringAssistantModel
 
 
 def main() -> None:
-    # 构造一个小的 input_example，方便后续推理和调试
+    # Construct a small input_example for subsequent inference and debugging.
     input_example = pd.DataFrame(
         {"question": ["What is the maximum operating temperature for the ECU-850b?"]}
     )
 
     model = MEEngineeringAssistantModel()
 
-    # 直接保存到本地目录，不走 runs:/ 的文件结构
+    # Save directly to the local directory without going through the runs:/ file structure.
     save_path = Path("saved_model") / "me_engineering_assistant_model"
     save_path.parent.mkdir(parents=True, exist_ok=True)
 

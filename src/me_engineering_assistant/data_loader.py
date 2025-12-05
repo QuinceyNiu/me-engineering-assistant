@@ -5,7 +5,6 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 
 def load_markdown(path: Path) -> str:
-    """读取 markdown 文本内容。"""
     with path.open("r", encoding="utf-8") as f:
         return f.read()
 
@@ -17,9 +16,10 @@ def make_chunks(
     chunk_overlap: int,
 ) -> List[Dict]:
     """
-    将长文档切分为小 chunk，附带来源元数据。
+    Split long documents into smaller chunks,
+    including source metadata.
 
-    返回格式：
+    Return Format：
     [
         {
             "page_content": "...",

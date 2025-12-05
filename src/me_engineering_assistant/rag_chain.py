@@ -8,16 +8,13 @@ from transformers import AutoTokenizer, AutoModelForCausalLM
 
 from .config import TOP_K
 
-# 使用一个适合问答的指令模型，体积不大，M1 Pro 能跑得动
 MODEL_NAME = "microsoft/Phi-3-mini-4k-instruct"
 
-# 选择设备：优先用 M1 的 mps
 if torch.backends.mps.is_available():
     DEVICE = "mps"
 else:
     DEVICE = "cpu"
 
-# mps 上用 bfloat16 更稳，cpu 用 float32
 DTYPE = torch.bfloat16 if DEVICE == "mps" else torch.float32
 
 print(f"[RAG] Loading local LLM '{MODEL_NAME}' on device: {DEVICE}, dtype: {DTYPE}")
@@ -34,9 +31,9 @@ model.eval()
 
 def _build_prompt(question: str, context: str) -> str:
     """
-    对于支持 chat template 的模型（如 Phi-3-mini-instruct），
-    优先用 apply_chat_template 构造 prompt。
-    如果失败，就退回到手写文本模板。
+    For models that support chat templates (such as Phi-3-mini-instruct),
+    prioritize constructing prompts using `apply_chat_template`.
+    If that fails, fall back to manually written text templates.
     """
     system_msg = (
         'You are the "ME Engineering Assistant", an ECU technical expert. '
@@ -56,7 +53,7 @@ def _build_prompt(question: str, context: str) -> str:
         {"role": "user", "content": user_msg},
     ]
 
-    # 优先走 chat template
+    # Prioritize chat template
     try:
         prompt = tokenizer.apply_chat_template(
             messages,
@@ -65,7 +62,7 @@ def _build_prompt(question: str, context: str) -> str:
         )
         return prompt
     except Exception:
-        # 兜底：退回拼接式 prompt
+        # Fallback: Return the concatenated prompt
         return (
             system_msg
             + "\n\n"
@@ -75,7 +72,8 @@ def _build_prompt(question: str, context: str) -> str:
 
 
 def _generate_llm_answer(prompt: str, max_new_tokens: int = 256) -> str:
-    """调用本地 LLM 生成答案，从完整输出中抽取“最像答案的一句”返回。"""
+    """Invoke the local LLM to generate the answer,
+    extract the “most answer-like sentence” from the full output, and return it."""
     inputs = tokenizer(prompt, return_tensors="pt").to(DEVICE)
 
     with torch.no_grad():
@@ -87,14 +85,14 @@ def _generate_llm_answer(prompt: str, max_new_tokens: int = 256) -> str:
 
     full_text = tokenizer.decode(outputs[0], skip_special_tokens=True).strip()
 
-    # 如果有 assistant 标记，优先只取 assistant 之后的部分
+    #If an assistant tag is present, prioritize extracting only the portion following the assistant tag.
     for key in ["<assistant>", "Assistant:", "assistant:"]:
         if key in full_text:
             full_text = full_text.split(key, 1)[-1].strip()
             break
 
-    # 按句子切分（简单按 . ? ! 分）
-    # 保留分隔符，方便重新拼回完整句子
+    # Split by Sentences (Simply by . ? !)
+    # Preserve delimiters for easy reassembly into complete sentences
     parts = re.split(r'([\.?!])', full_text)
     sentences = []
     for i in range(0, len(parts) - 1, 2):
@@ -105,19 +103,19 @@ def _generate_llm_answer(prompt: str, max_new_tokens: int = 256) -> str:
     if not sentences:
         return "The manual does not provide this information."
 
-    # 先找“同时包含数字”的句子（很可能是规格或者答案）
+    # First, locate sentences that “contain numbers” (likely specifications or answers).
     candidate_sentences = [s for s in sentences if re.search(r'\d', s)]
     if not candidate_sentences:
-        # 兜底：找不含明显 prompt 关键词的最后一句
+        # Fallback: Find the last sentence without obvious prompt keywords
         for s in reversed(sentences):
             low = s.lower()
             if any(x in low for x in ["context:", "question:", "you are the", "answer in concise"]):
                 continue
             return s.strip()
-        # 实在不行就最后一句
+        # If all else fails, just go with the last line.
         return sentences[-1].strip()
 
-    # 再从这些候选句子里，尽量排除“问题本身”
+    # Then, from these candidate sentences, try to eliminate the “problem itself.”
     filtered = []
     for s in candidate_sentences:
         low = s.lower()
@@ -141,10 +139,10 @@ def rag_answer(
     routes: List[str],
 ) -> str:
     """
-    进行检索增强生成：
-    - 根据 routes 从选定向量库取相似片段
-    - 拼接 context
-    - 调用本地 LLM 生成答案
+    Perform retrieval-augmented generation:
+    - Retrieve similar fragments from the selected vector library based on routes
+    - Concatenate context
+    - Invoke the local LLM to generate the answer
     """
     docs = []
     for route in routes:
@@ -154,7 +152,7 @@ def rag_answer(
     if not docs:
         return "The manual does not provide this information."
 
-    # 拼接上下文，避免太长
+    # Concatenate the context to avoid excessive length.
     context_parts = []
     seen = set()
     for d in docs:

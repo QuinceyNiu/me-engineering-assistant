@@ -1,5 +1,5 @@
 """
-调试脚本：直接在 IDE 里运行，用来快速验证 Agent 的效果。
+Debugging script: Run directly within the IDE to quickly validate the Agent's functionality.
 """
 
 from .graph import run_agent

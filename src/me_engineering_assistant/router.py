@@ -11,10 +11,10 @@ class RoutingDecision(TypedDict):
     reason: str
 
 
-# 根据文件内容的直觉做简单关键词匹配：
-# - ECU-700 系列：ECU-750、ECU-700
-# - ECU-800-base：ECU-850、ECU-800
-# - ECU-800-plus：ECU-850b、plus 版
+# Perform simple keyword matching based on file content:
+# - ECU-700 Series: ECU-750, ECU-700
+# - ECU-800-base: ECU-850, ECU-800
+# - ECU-800-plus: ECU-850b, plus version
 DOC_KEYWORDS = {
     "ECU-700": ["750", "700", "ecu 750", "ecu-750", "ecu700"],
     "ECU-800-base": ["850", "800", "ecu 850", "ecu-850", "ecu800"],
@@ -24,9 +24,9 @@ DOC_KEYWORDS = {
 
 def route_question(question: str) -> RoutingDecision:
     """
-    不用 LLM，只用关键词做朴素路由：
-    - 命中哪个关键词，就选哪个文档集合
-    - 如果一个都没命中，就默认选全部，交给 RAG 去过滤
+    No LLM required—use keywords for simple routing:
+    - Match a keyword to select the corresponding document collection
+    - If no keywords match, default to all collections and let RAG handle filtering
     """
     q = question.lower()
     selected: List[RouteName] = []
