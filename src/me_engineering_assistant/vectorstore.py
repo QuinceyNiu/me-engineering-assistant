@@ -1,0 +1,62 @@
+from typing import Dict, List
+
+from langchain_community.vectorstores import Chroma
+from langchain_community.embeddings import HuggingFaceEmbeddings
+from langchain_core.documents import Document
+
+from .config import (
+    ECU_700_PATH,
+    ECU_800_BASE_PATH,
+    ECU_800_PLUS_PATH,
+    EMBEDDING_MODEL_NAME,
+    CHUNK_SIZE,
+    CHUNK_OVERLAP,
+)
+from .data_loader import load_markdown, make_chunks
+
+
+def _build_collection(docs: List[dict], embeddings) -> Chroma:
+    """用文档列表构建一个 Chroma 向量库。"""
+    return Chroma.from_documents(
+        [
+            Document(
+                page_content=d["page_content"],
+                metadata=d.get("metadata", {}),
+            )
+            for d in docs
+        ],
+        embedding=embeddings,
+    )
+
+
+def build_vectorstores() -> Dict[str, Chroma]:
+    """
+    构建三个向量库，对应：
+    - ECU-700
+    - ECU-800-base
+    - ECU-800-plus
+    返回一个 dict，key 为路由名。
+    """
+    embeddings = HuggingFaceEmbeddings(model_name=EMBEDDING_MODEL_NAME)
+
+    ecu700_text = load_markdown(ECU_700_PATH)
+    ecu800_base_text = load_markdown(ECU_800_BASE_PATH)
+    ecu800_plus_text = load_markdown(ECU_800_PLUS_PATH)
+
+    ecu700_chunks = make_chunks(ecu700_text, "ECU-700", CHUNK_SIZE, CHUNK_OVERLAP)
+    ecu800_base_chunks = make_chunks(
+        ecu800_base_text, "ECU-800-base", CHUNK_SIZE, CHUNK_OVERLAP
+    )
+    ecu800_plus_chunks = make_chunks(
+        ecu800_plus_text, "ECU-800-plus", CHUNK_SIZE, CHUNK_OVERLAP
+    )
+
+    vs700 = _build_collection(ecu700_chunks, embeddings)
+    vs800_base = _build_collection(ecu800_base_chunks, embeddings)
+    vs800_plus = _build_collection(ecu800_plus_chunks, embeddings)
+
+    return {
+        "ECU-700": vs700,
+        "ECU-800-base": vs800_base,
+        "ECU-800-plus": vs800_plus,
+    }
