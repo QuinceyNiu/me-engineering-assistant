@@ -61,7 +61,7 @@ def _build_prompt(question: str, context: str) -> str:
             add_generation_prompt=True,
         )
         return prompt
-    except Exception:
+    except Exception:   # pylint: disable=broad-exception-caught
         # Fallback: Return the concatenated prompt
         return (
             system_msg
@@ -85,7 +85,8 @@ def _generate_llm_answer(prompt: str, max_new_tokens: int = 256) -> str:
 
     full_text = tokenizer.decode(outputs[0], skip_special_tokens=True).strip()
 
-    #If an assistant tag is present, prioritize extracting only the portion following the assistant tag.
+    # If an assistant tag is present,
+    # prioritize extracting only the portion following the assistant tag.
     for key in ["<assistant>", "Assistant:", "assistant:"]:
         if key in full_text:
             full_text = full_text.split(key, 1)[-1].strip()

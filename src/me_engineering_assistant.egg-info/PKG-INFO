@@ -24,28 +24,73 @@ Provides-Extra: dev
 Requires-Dist: pytest; extra == "dev"
 Requires-Dist: pylint; extra == "dev"
 
-# ME Engineering Assistant – RAG + LangGraph + MLflow Agent
+# ME Engineering Assistant
 
-A production-ready Retrieval-Augmented Generation (RAG) agent designed to help ME engineers quickly retrieve and compare specifications from the **ECU-700** and **ECU-800** series manuals.
+A production-ready Retrieval-Augmented Generation (RAG) system designed to answer engineering questions based on ECU (Electronic Control Unit) technical manuals.  
+The system supports:
 
-The system intelligently routes queries, retrieves relevant content, and generates concise technical answers using a local LLM (Phi-3 by default). It is packaged as a Python module, logged with MLflow, and exposes a FastAPI prediction endpoint.
+- Local LLM inference (Phi-3 Mini)
+- RAG with manual embeddings
+- Question routing across multiple ECU models
+- End-to-end FastAPI REST service
+- MLflow model packaging + production loading
+- Docker deployment
 
 ---
 
-## 1. Project Overview
+## 🚀 Features
 
-Engineers frequently need to answer questions such as:
+### ✔ Multi-Manual RAG
+Loads ECU-700, ECU-800 Base, and ECU-800 Plus manuals and automatically routes questions to the correct documents.
 
-- “What is the maximum operating temperature of the ECU-850b?”
-- “Compare CAN bus speeds between ECU-750 and ECU-850.”
+### ✔ Local Phi-3 LLM Inference
+Runs fully offline using Microsoft's `Phi-3-mini-4k-instruct` model on CPU or MPS (Apple Silicon).
 
-This agent solves the problem by combining:
+### ✔ Embedding-based Vector Search  
+Uses sentence-transformer embeddings to retrieve high-relevance technical passages.
 
-- Automated document routing using LangGraph  
-- Vector-based retrieval with FAISS  
-- Local LLM reasoning (Phi-3-mini)  
-- MLflow model packaging  
-- FastAPI serving
+### ✔ Router Model
+Classifies questions into `ECU-800-base`, `ECU-800-plus`, or fallback categories.
+
+### ✔ MLflow Model Packaging
+Exports the entire RAG pipeline as a reproducible MLflow model for production deployment.
+
+### ✔ FastAPI Web Server
+Provides a `/predict` endpoint for integration with external applications or Postman.
+
+---
+
+## 1. Architecture Overview
+
+```text
+                ┌───────────────────────┐
+                │ Question (User Input) │
+                └─────────────┬─────────┘
+                              ▼
+                    ┌───────────────────┐
+                    │ Router Model      │
+                    │ (LangChain)       │
+                    └──────────┬────────┘
+                               ▼
+        ┌─────────────────────────────────────────┐
+        │ Select relevant ECU manual               │
+        │ ECU-700 / ECU-800 Base / ECU-800 Plus   │
+        └───────────────────┬─────────────────────┘
+                            ▼
+                 ┌───────────────────┐
+                 │ Vectorstore       │
+                 │ (Embeddings + FA) │
+                 └──────────┬────────┘
+                            ▼
+                 ┌───────────────────┐
+                 │ Local LLM (Phi-3) │
+                 │ Generate Answer   │
+                 └──────────┬────────┘
+                            ▼
+                 ┌───────────────────┐
+                 │ Final Response     │
+                 └────────────────────┘
+```
 
 ---
 
@@ -63,28 +108,26 @@ me-engineering-assistant/
 │   ├── ECU-800_Series_Plus.md
 │   └── test-questions.csv
 │
-├── mlruns/
-│   └── 0/
+├── mlruns/                   # MLflow local model registry
 │
 ├── src/
 │   └── me_engineering_assistant/
 │       ├── __init__.py
-│       ├── __main__.py
-│       ├── api.py
+│       ├── __main__.py       # FastAPI entrypoint
+│       ├── api.py            # REST API logic
 │       ├── config.py
 │       ├── data_loader.py
-│       ├── graph.py
-│       ├── log_model.py
-│       ├── mlflow_model.py
-│       ├── rag_chain.py
-│       ├── router.py
-│       ├── sandbox_test.py
-│       ├── vectorstore.py
+│       ├── graph.py          # LangGraph orchestration
+│       ├── log_model.py      # MLflow model export
+│       ├── mlflow_model.py   # Inference wrapper for MLflow
+│       ├── rag_chain.py      # RAG logic
+│       ├── router.py         # Question routing
+│       ├── sandbox_test.py   # Local debugging CLI
+│       ├── vectorstore.py    # Embeddings + vector DB
 │
 ├── tests/
 │   └── test_agent_e2e.py
 ```
-
 
 ---
 
@@ -92,16 +135,16 @@ me-engineering-assistant/
 
 ### 3.1 System Components
 
-| Component | Description |
-|----------|-------------|
-| `router.py` | Routes questions to the correct manual set using LangGraph |
-| `vectorstore.py` | Builds FAISS index + HuggingFace embeddings |
-| `rag_chain.py` | Retrieval-Augmented Generation pipeline |
-| `graph.py` | LangGraph workflow orchestrating router + RAG |
-| `api.py` | FastAPI server exposing `/predict` |
-| `mlflow_model.py` | MLflow pyfunc wrapper with predict() |
-| `log_model.py` | Logs the agent as an MLflow model |
-| `sandbox_test.py` | Command-line testing script |
+| Component         | Description                                                |
+|-------------------|------------------------------------------------------------|
+| `router.py`       | Routes questions to the correct manual set using LangGraph |
+| `vectorstore.py`  | Builds FAISS index + HuggingFace embeddings                |
+| `rag_chain.py`    | Retrieval-Augmented Generation pipeline                    |
+| `graph.py`        | LangGraph workflow orchestrating router + RAG              |
+| `api.py`          | FastAPI server exposing `/predict`                         |
+| `mlflow_model.py` | MLflow pyfunc wrapper with predict()                       |
+| `log_model.py`    | Logs the agent as an MLflow model                          |
+| `sandbox_test.py` | Command-line testing script                                |
 
 ---
 
@@ -124,7 +167,12 @@ source .venv/bin/activate
 ### 4.3 Install dependencies
 
 ```bash
-pip install -r requirements.txt
+pip install .
+```
+
+For development mode:
+```bash
+pip install -e .
 ```
 
 ---

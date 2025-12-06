@@ -28,14 +28,17 @@ COPY pyproject.toml ./
 COPY src ./src
 COPY data ./data
 
-# Optional: include locally logged MLflow runs so MODEL_URI like
-# runs:/<RUN_ID>/me_engineering_assistant_model works inside the container.
-# COPY mlruns ./mlruns
-COPY saved_model ./saved_model
+# ✅ 现在我们拷贝的是 mlruns（而不是 saved_model）
+#   注意：构建镜像前，本地要已经执行过：
+#     python -m me_engineering_assistant.log_model
+COPY mlruns ./mlruns
 
 # Install the project as a package
 RUN pip install --upgrade pip && \
     pip install .
+
+# Tell MLflow to look at /app/mlruns inside the container
+ENV MLFLOW_TRACKING_URI="file:/app/mlruns"
 
 # Create non-root user for better security
 RUN useradd -m appuser && chown -R appuser:appuser /app
@@ -44,9 +47,9 @@ USER appuser
 # FastAPI default port
 EXPOSE 8000
 
-# MODEL_URI should be provided at runtime, e.g.:
-#   runs:/<RUN_ID>/me_engineering_assistant_model
-ENV MODEL_URI="saved_model/me_engineering_assistant_model"
+# ❌ 不再在这里写死 MODEL_URI
+# MODEL_URI 在 docker run 时通过 -e 传入，比如：
+# runs:/7812eb1225d64ebeb6e8b71c108a0492/me_engineering_assistant_model
 
 # Start the FastAPI server via package entrypoint
 CMD ["python", "-m", "me_engineering_assistant"]

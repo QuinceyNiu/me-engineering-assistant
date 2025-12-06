@@ -4,8 +4,9 @@ Debugging script: Run directly within the IDE to quickly validate the Agent's fu
 
 from .graph import run_agent
 
-
 def main() -> None:
+    """Simple CLI smoke test for the agent using a hard-coded example question."""
+
     question = "What is the maximum operating temperature for the ECU-850b?"
     result = run_agent(question)
 
