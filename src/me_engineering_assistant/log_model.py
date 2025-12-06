@@ -7,7 +7,7 @@ import pandas as pd
 
 from .mlflow_model import MEEngineeringAssistantModel
 
-# 固定的 Registered Model 名字，后面通过别名来引用
+# Fixed Registered Model name, referenced later via alias
 REGISTERED_MODEL_NAME = "me-engineering-assistant"
 EXPERIMENT_NAME = "me-engineering-assistant"
 
@@ -17,38 +17,38 @@ def main() -> None:
     Log the current RAG agent as an MLflow pyfunc model, register it,
     and update the "prod" alias to point to the latest version.
 
-    运行方式:
+    Operation method:
         python -m me_engineering_assistant.log_model
 
-    之后即可使用:
-        MODEL_URI = "models:/me-engineering-assistant@prod"
-    来加载最新的生产模型，而无需手动复制 run_id。
+    Afterwards, you can use:
+        MODEL_URI = “models:/me-engineering-assistant@prod”
+    to load the latest production model without manually copying the run_id.
     """
 
-    # 1. 构造一个小的 input_example，方便后续推理 & 自动推断签名
+    # Construct a small input_example to facilitate subsequent inference and automatic signature deduction.
     input_example = pd.DataFrame(
         {"question": ["What is the maximum operating temperature for the ECU-850b?"]}
     )
 
-    # 2. 实例化当前的 RAG Agent / 模型封装
+    # Instantiate the current RAG Agent / Model Encapsulation
     model = MEEngineeringAssistantModel()
 
-    # 3. 为本地文件后端预留目录（即使你用的是 DB backend，也不会有坏影响）
+    # Reserve a directory for the local file backend (even if you're using a DB backend, it won't cause any issues).
     tracking_dir = Path("mlruns")
     tracking_dir.mkdir(exist_ok=True)
 
-    # ⚠️ 不强行指定 tracking_uri，尊重环境变量 MLFLOW_TRACKING_URI
-    # 如果你真的想强制使用本地文件存储，可以解除下面两行注释：
+    # ⚠️ Do not force the tracking_uri; respect the MLFLOW_TRACKING_URI environment variable.
+    # If you really want to force the use of local file storage, uncomment the following two lines:
     # mlflow.set_tracking_uri(tracking_dir.resolve().as_uri())
 
-    # 4. 使用一个专门的 experiment 名称，避免和别的实验混在一起
+    # Use a dedicated experiment name to avoid mixing with other experiments.
     mlflow.set_experiment(EXPERIMENT_NAME)
 
-    # 5. 开始一个新的 run，并在其中 log + 注册模型
+    # Start a new run and log + register the model within it.
     with mlflow.start_run(run_name="me-engineering-assistant") as run:
-        # 将当前 Agent 封装为 pyfunc 模型并:
-        # 1) 记录到当前 run 的 artifacts
-        # 2) 注册到 Model Registry，名称 REGISTERED_MODEL_NAME
+        # Wrap the current Agent as a pyfunc model and:
+        # 1) Record it in the artifacts of the current run
+        # 2) Register it in the Model Registry with the name REGISTERED_MODEL_NAME
         _ = mlflow.pyfunc.log_model(
             artifact_path="me_engineering_assistant_model",  # 此参数虽有弃用 warning，但仍完全可用
             python_model=model,
@@ -63,24 +63,23 @@ def main() -> None:
             f"  runs:/{run_id}/me_engineering_assistant_model"
         )
 
-    # 6. 使用 Model Registry 的 alias 功能，自动把 "prod" 指向最新版本
+    # Use the alias feature of the Model Registry to automatically point “prod” to the latest version.
     client = MlflowClient()
 
-    # 使用 search_model_versions（推荐 API），而不是旧的 get_latest_versions
-    # 过滤条件：只查这个 Registered Model 名字下的所有版本
+    # Use `search_model_versions` (recommended API) instead of the outdated `get_latest_versions`
+    # Filter condition: Retrieve all versions under this Registered Model name
     versions = client.search_model_versions(f"name = '{REGISTERED_MODEL_NAME}'")
 
     if not versions:
-        # 理论上不会发生，因为上面刚刚 log 了一个版本
         raise RuntimeError(
             f"No versions found for registered model '{REGISTERED_MODEL_NAME}'. "
             "Please make sure log_model ran successfully."
         )
 
-    # 取 version 数字最大的作为“最新版本”
+    # Take the version with the highest number as the “latest version”
     latest_version = max(versions, key=lambda v: int(v.version))
 
-    # 将别名 "prod" 指向这个最新版本（如果已存在会被覆盖）
+    # Set the alias “prod” to point to this latest version
     client.set_registered_model_alias(
         name=REGISTERED_MODEL_NAME,
         alias="prod",
@@ -94,7 +93,7 @@ def main() -> None:
         f"\n  alias   = prod"
     )
     print(
-        "\nRecommended MODEL_URI (建议全部环境都用这个):\n"
+        "\nRecommended MODEL_URI:\n"
         f"  models:/{REGISTERED_MODEL_NAME}@prod\n"
     )
     print("Model logging & alias update finished successfully.\n")

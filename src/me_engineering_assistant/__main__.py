@@ -5,7 +5,7 @@ import uvicorn
 from .api import create_app
 
 
-# 默认使用 Model Registry 的别名 "prod"
+# Default to using the alias “prod” from the Model Registry
 DEFAULT_MODEL_URI = "models:/me-engineering-assistant@prod"
 
 

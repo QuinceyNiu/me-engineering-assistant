@@ -7,7 +7,7 @@ class MEEngineeringAssistantModel(mlflow.pyfunc.PythonModel):
 
     def predict(self, context, model_input: pd.DataFrame, params=None) -> pd.DataFrame:
         """Run the agent on a DataFrame with a 'question' column."""
-        # 懒加载，避免在导入本模块时就加载整个 RAG / 大模型
+        # Lazy loading to avoid loading the entire RAG/large model when importing this module
         from .graph import run_agent
 
         del params  # unused, kept for API compatibility

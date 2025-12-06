@@ -36,7 +36,7 @@ def route_question(question: str) -> RoutingDecision:
             selected.append(route)  # type: ignore[arg-type]
 
     if not selected:
-        # 完全没匹配到，就全部兜底
+        # No matches found at all, so catch all
         selected = ["ECU-700", "ECU-800-base", "ECU-800-plus"]  # type: ignore[assignment]
         reason = "No strong keyword match, falling back to all docs."
     else:
