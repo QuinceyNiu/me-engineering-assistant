@@ -17,6 +17,12 @@ class AnswerResponse(BaseModel):
 def create_app(model_uri: str) -> FastAPI:
     """
     Create a FastAPI application and load the MLflow pyfunc model.
+
+    参数 model_uri 可以是：
+      - 具体某次 run 的模型：
+          runs:/<run_id>/me_engineering_assistant_model
+      - 通过 Model Registry 的别名（推荐）：
+          models:/me-engineering-assistant@prod
     """
     app = FastAPI(title="ME Engineering Assistant API")
 
