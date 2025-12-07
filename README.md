@@ -104,19 +104,19 @@ me-engineering-assistant/
 
 ```mermaid
 flowchart TD
-    A([User Question]) --> B([Router<br/>(ECU Type)])
+    A[User Question] --> B[Router (ECU Type)]
     B --> C{Select Manual Set}
     
-    C -->|ECU-700| D1([ECU-700 Manuals])
-    C -->|ECU-800 Base| D2([ECU-800 Base Manuals])
-    C -->|ECU-800 Plus| D3([ECU-800 Plus Manuals])
+    C -->|ECU-700| D1[ECU-700 Manuals]
+    C -->|ECU-800 Base| D2[ECU-800 Base Manuals]
+    C -->|ECU-800 Plus| D3[ECU-800 Plus Manuals]
 
-    D1 --> E[[Vector Retrieval<br/>(Embeddings + Chroma)]]
+    D1 --> E[Vector Retrieval (Embeddings + Chroma)]
     D2 --> E
     D3 --> E
 
-    E --> F[[Local LLM (Phi-3)<br/>Generate Answer]]
-    F --> G([Final Answer])
+    E --> F[Local LLM (Phi-3): Generate Answer]
+    F --> G[Final Answer]
 ```
 
 ---
