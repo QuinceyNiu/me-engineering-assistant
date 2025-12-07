@@ -1,12 +1,12 @@
 # src/me_engineering_assistant/rag_chain.py
-
 from typing import Dict, List
 import re
 
 import torch
-from transformers import AutoTokenizer, AutoModelForCausalLM
+from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from .config import TOP_K
+
 
 MODEL_NAME = "microsoft/Phi-3-mini-4k-instruct"
 
@@ -20,7 +20,6 @@ DTYPE = torch.bfloat16 if DEVICE == "mps" else torch.float32
 print(f"[RAG] Loading local LLM '{MODEL_NAME}' on device: {DEVICE}, dtype: {DTYPE}")
 
 tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
-
 model = AutoModelForCausalLM.from_pretrained(
     MODEL_NAME,
     torch_dtype=DTYPE,
@@ -61,21 +60,17 @@ def _build_prompt(question: str, context: str) -> str:
             add_generation_prompt=True,
         )
         return prompt
-    except Exception:   # pylint: disable=broad-exception-caught
-        # Fallback: Return the concatenated prompt
-        return (
-            system_msg
-            + "\n\n"
-            + user_msg
-            + "\n\nAnswer:"
-        )
+    except Exception:  # pylint: disable=broad-exception-caught
+        # Fallback: return the concatenated prompt
+        return system_msg + "\n\n" + user_msg + "\n\nAnswer:"
 
 
-def _generate_llm_answer(prompt: str, max_new_tokens: int = 256) -> str:
-    """Invoke the local LLM to generate the answer,
-    extract the “most answer-like sentence” from the full output, and return it."""
+def _generate_llm_answer(prompt: str, max_new_tokens: int = 128) -> str:
+    """
+    Invoke the local LLM to generate the answer, extract the “most answer-like
+    sentence” from the full output, and return it.
+    """
     inputs = tokenizer(prompt, return_tensors="pt").to(DEVICE)
-
     with torch.no_grad():
         outputs = model.generate(
             **inputs,
@@ -85,17 +80,17 @@ def _generate_llm_answer(prompt: str, max_new_tokens: int = 256) -> str:
 
     full_text = tokenizer.decode(outputs[0], skip_special_tokens=True).strip()
 
-    # If an assistant tag is present,
-    # prioritize extracting only the portion following the assistant tag.
-    for key in ["<assistant>", "Assistant:", "assistant:"]:
-        if key in full_text:
+    # If an assistant tag is present, prioritize extracting only the portion
+    # following the assistant tag.
+    for key in ["", "Assistant:", "assistant:"]:
+        if key and key in full_text:
             full_text = full_text.split(key, 1)[-1].strip()
             break
 
-    # Split by Sentences (Simply by . ? !)
-    # Preserve delimiters for easy reassembly into complete sentences
-    parts = re.split(r'([\.?!])', full_text)
-    sentences = []
+    # Split by sentences (simply by . ? !)
+    # Preserve delimiters for easy reassembly into complete sentences.
+    parts = re.split(r"([\.?!])", full_text)
+    sentences: List[str] = []
     for i in range(0, len(parts) - 1, 2):
         sent = (parts[i] + parts[i + 1]).strip()
         if sent:
@@ -105,19 +100,29 @@ def _generate_llm_answer(prompt: str, max_new_tokens: int = 256) -> str:
         return "The manual does not provide this information."
 
     # First, locate sentences that “contain numbers” (likely specifications or answers).
-    candidate_sentences = [s for s in sentences if re.search(r'\d', s)]
+    candidate_sentences = [s for s in sentences if re.search(r"\d", s)]
+
     if not candidate_sentences:
-        # Fallback: Find the last sentence without obvious prompt keywords
+        # Fallback: find the last sentence without obvious prompt keywords
         for s in reversed(sentences):
             low = s.lower()
-            if any(x in low for x in ["context:", "question:", "you are the", "answer in concise"]):
+            if any(
+                x in low
+                for x in [
+                    "context:",
+                    "question:",
+                    "you are the",
+                    "answer in concise",
+                ]
+            ):
                 continue
             return s.strip()
+
         # If all else fails, just go with the last line.
         return sentences[-1].strip()
 
     # Then, from these candidate sentences, try to eliminate the “problem itself.”
-    filtered = []
+    filtered: List[str] = []
     for s in candidate_sentences:
         low = s.lower()
         if "question" in low:
@@ -136,7 +141,7 @@ def _generate_llm_answer(prompt: str, max_new_tokens: int = 256) -> str:
 
 def rag_answer(
     question: str,
-    vs_dict: Dict[str, any],
+    vs_dict: Dict[str, object],
     routes: List[str],
 ) -> str:
     """
@@ -154,7 +159,7 @@ def rag_answer(
         return "The manual does not provide this information."
 
     # Concatenate the context to avoid excessive length.
-    context_parts = []
+    context_parts: List[str] = []
     seen = set()
     for d in docs:
         if d.page_content not in seen:

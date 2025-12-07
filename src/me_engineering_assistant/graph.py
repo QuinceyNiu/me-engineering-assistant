@@ -1,36 +1,41 @@
 from typing import Dict, List, TypedDict
 
-from langgraph.graph import StateGraph, END
+from langgraph.graph import END, StateGraph
 
-from .vectorstore import build_vectorstores
 from .router import route_question
 from .rag_chain import rag_answer
+from .vectorstore import build_vectorstores
 
 
 class AgentState(TypedDict):
+    """State container flowing through the LangGraph workflow."""
     question: str
     routes: List[str]
     answer: str
     metadata: Dict
 
 
-# Build the vector library once during module loading (sufficient for small data scenarios)
+# Build the vector library once during module loading
+# (sufficient for small data scenarios)
 VECTORSTORES = build_vectorstores()
 
 
 def router_node(state: AgentState) -> AgentState:
-    """LangGraph Node: Route based on the query."""
+    """LangGraph node: route based on the query."""
     decision = route_question(state["question"])
+
     state["routes"] = decision["routes"]
     state.setdefault("metadata", {})
     state["metadata"]["routing_reason"] = decision["reason"]
+
     return state
 
 
 def rag_node(state: AgentState) -> AgentState:
-    """LangGraph Node: Performs RAG based on routing to generate responses."""
+    """LangGraph node: perform RAG based on routing to generate responses."""
     routes = state.get("routes") or list(VECTORSTORES.keys())
     answer = rag_answer(state["question"], VECTORSTORES, routes)
+
     state["answer"] = answer
     return state
 
@@ -49,17 +54,26 @@ def build_agent_graph():
     return graph.compile()
 
 
-def run_agent(question: str) -> Dict:
+# ✅ Compile the workflow once at module import time and reuse it
+WORKFLOW = build_agent_graph()
+
+
+def run_agent(question: str) -> AgentState:
     """
-    Exposed Simple Interface:
+    Exposed simple interface:
     Given a query, return the final state.
+
     The state contains:
-    - “answer”: The final response
-    - “routes”: Which document collections were used
-    - “metadata”: Such as routing reasons
+      - "answer":  The final response
+      - "routes":  Which document collections were used
+      - "metadata": Such as routing reasons
     """
-    workflow = build_agent_graph()
-    final_state: AgentState = workflow.invoke(
-        {"question": question, "routes": [], "answer": "", "metadata": {}}
+    final_state: AgentState = WORKFLOW.invoke(
+        {
+            "question": question,
+            "routes": [],
+            "answer": "",
+            "metadata": {},
+        },
     )
     return final_state

@@ -59,7 +59,7 @@ def main() -> None:
         run_id = run.info.run_id
         print(f"Logged MLflow model to experiment '{EXPERIMENT_NAME}', run_id = {run_id}")
         print(
-            "Run-specific MODEL_URI (仅调试用):\n"
+            "Run-specific MODEL_URI (Only for test):\n"
             f"  runs:/{run_id}/me_engineering_assistant_model"
         )
 
