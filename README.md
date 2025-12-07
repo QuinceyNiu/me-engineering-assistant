@@ -111,22 +111,12 @@ flowchart TD
     C -->|ECU-800 Base| D2([ECU-800 Base Manuals])
     C -->|ECU-800 Plus| D3([ECU-800 Plus Manuals])
 
-    D1 --> E[[Vector Retrieval<br/>(Embedding + FAISS)]]
+    D1 --> E[[Vector Retrieval<br/>(Embeddings + Chroma)]]
     D2 --> E
     D3 --> E
 
     E --> F[[Local LLM (Phi-3)<br/>Generate Answer]]
     F --> G([Final Answer])
-
-    style A fill:#d0e6ff,stroke:#4b9ce2,stroke-width:2px
-    style B fill:#ffeccc,stroke:#e2a84b,stroke-width:2px
-    style C fill:#fff9c4,stroke:#d4b200,stroke-width:2px
-    style D1 fill:#e8f5e9,stroke:#66bb6a,stroke-width:2px
-    style D2 fill:#e8f5e9,stroke:#66bb6a,stroke-width:2px
-    style D3 fill:#e8f5e9,stroke:#66bb6a,stroke-width:2px
-    style E fill:#fce4ec,stroke:#e91e63,stroke-width:2px
-    style F fill:#f3e5f5,stroke:#9c27b0,stroke-width:2px
-    style G fill:#d7ccc8,stroke:#6d4c41,stroke-width:2px
 ```
 
 ---
