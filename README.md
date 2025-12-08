@@ -232,19 +232,74 @@ python -m me_engineering_assistant
 
 ## 🧪 10. Testing & Validation Strategy
 
-### Included automated tests
+This project uses a two-layer testing strategy to validate both functionality and real-world performance of the agent.
 
-```test_agent_e2e.py``` validates:
+### 10.1 Functional Testing (Pytest)
 
-- Routing correctness
-- Retrieval behavior
-- Final answer quality
-- End-to-end execution stability
+A streamlined end-to-end test (`tests/test_agent_e2e.py`) verifies that the agent can correctly answer the majority of questions in `test-questions.csv`.
 
-Run tests:
+The test performs the following:
+
+- Loads all evaluation questions from the CSV file  
+- Runs the complete agent pipeline (routing → retrieval → Phi-3 generation)  
+- Records per-query latency  
+- Counts how many answers are non-fallback responses  
+- Ensures **at least 80% answer accuracy**, as required by the challenge
+
+Run the test:
 ```bash
-pytest -q
+pytest -q -s
 ```
+
+Sample output:
+```bash
+=== ME Engineering Assistant: E2E Benchmark ===
+01. [OK ] 4.93s - What is the maximum operating temperature for the ECU-750?
+...
+Summary:
+- Questions      : 10
+- Answered       : 10 (100%)
+- Avg time / q   : 12.91s
+- Max time / q   : 29.23s
+```
+This confirms both correctness and overall stability of the RAG + LLM pipeline.
+
+### 10.2 Performance & Answer Inspection (Benchmark Script)
+
+A dedicated benchmark script is provided for detailed inspection of:
+
+- The exact answer returned for each question
+- End-to-end latency per query
+- Overall accuracy
+- Totals and summary metrics
+
+Run the benchmark:
+```bash
+python -m tests.benchmark
+```
+
+Example output:
+```bash
+01. [OK ] 4.82s
+    Q: How much RAM does the ECU-850 have?
+    A: The ECU-850 has 2 GB of LPDDR4 RAM.
+...
+Summary:
+- Questions         : 10
+- Answered          : 10 (100%)
+- Avg time / q      : 11.03s
+- Max time / q      : 23.77s
+- Total runtime     : 110.28s
+```
+This script is intended for human inspection and performance reporting, and is not part of the automated pytest suite.
+
+### 10.3 Validation Criteria
+
+The agent is considered valid when:
+
+- ≥ 80% of questions receive a non-fallback answer (functional correctness)
+- Average latency remains within practical limits for local Phi-3 inference
+- No runtime errors occur across the full question set
 
 ---
 

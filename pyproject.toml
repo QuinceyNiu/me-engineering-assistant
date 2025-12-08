@@ -1,34 +1,51 @@
-[build-system]
-requires = ["setuptools", "wheel"]
-build-backend = "setuptools.build_meta"
-
 [project]
 name = "me-engineering-assistant"
 version = "0.1.0"
-description = "ME Engineering Assistant – multi-source RAG agent for ECU docs"
-readme = "README.md"
-requires-python = ">=3.10"
-authors = [
-    { name = "Quincey" },
-]
+description = "Multi-manual RAG agent for ECU technical documentation."
+requires-python = ">=3.11"
+authors = [{ name = "Quincey Niu" }]
 
 dependencies = [
-  "langchain",
-  "langgraph",
-  "langchain-community",
-  "langchain-text-splitters",
-  "sentence-transformers",
-  "chromadb",
-  "fastapi",
-  "uvicorn[standard]",
-  "mlflow",
-  "pydantic",
-  "pytest",
-  "pylint",
-  "transformers",
-  "accelerate",
-  "sentencepiece",
+    "langchain>=0.2.0",
+    "langgraph>=0.0.50",
+    "langchain-community>=0.2.0",
+    "langchain-huggingface>=0.1.0",
+
+    # Vector store
+    "chromadb>=0.5.0",
+
+    # MLflow
+    "mlflow>=2.10.0",
+
+    # FastAPI + server
+    "fastapi>=0.110.0",
+    "uvicorn>=0.29.0",
+
+    # Transformers for Phi-3
+    "transformers>=4.41.0",
+    "accelerate>=0.30.0",
+    "torch>=2.1.0",
+
+    # Utilities
+    "pydantic>=2.0.0",
+    "python-dotenv>=1.0.0"
 ]
 
 [project.optional-dependencies]
-dev = ["pytest", "pylint"]
+dev = [
+    "pytest",
+    "black",
+    "ruff",
+]
+
+[tool.pytest.ini_options]
+filterwarnings = [
+  "ignore:.*SwigPyPacked.*:DeprecationWarning",
+  "ignore:.*SwigPyObject.*:DeprecationWarning",
+  "ignore:.*swigvarlink.*:DeprecationWarning",
+  "ignore:.*HuggingFaceEmbeddings.*:DeprecationWarning",
+]
+
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
