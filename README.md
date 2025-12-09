@@ -4,24 +4,26 @@ A production-ready **Retrieval-Augmented Generation (RAG)** system that answers 
 
 This project demonstrates:
 - Local LLM inference (Phi-3 Mini)
+- Online open-source LLM inference (Llama 3.x via HuggingFace API)
 - Multi-document RAG
 - Query routing across multiple ECU models
 - FastAPI RESTful service
 - MLflow model packaging & serving
 - **Dockerfile template (experimental, not fully validated yet)**
 
-The system runs fully **offline**, making it suitable for on-premise or restricted environments.
+The system can run fully offline (local LLM) or partially online (remote LLM) based on user configuration.
 
 ---
 
 ## 🔍 1. Overview
 
 Modern engineering teams often rely on large, unstructured PDF/manual collections.  
-**ME Engineering Assistant** turns ECU manuals into an intelligent Q&A assistant powered by:
+**ME Engineering Assistant** transforms ECU manuals into an intelligent question-answering agent powered by:
 
-- Embedding-based retrieval  
-- Query routing  
-- Lightweight local LLM reasoning  
+- Embedding-based retrieval
+- Query routing
+- Local or remote LLM reasoning
+- LangGraph-based orchestration
 
 The system supports the following manuals:
 
@@ -29,29 +31,38 @@ The system supports the following manuals:
 - ECU-800 Base
 - ECU-800 Plus
 
-Routing ensures each query is answered using the most relevant manual family.
 
 ---
 
 ## ✨ 2. Key Features
 
 ### ✔ Multi-manual RAG  
-Automatically routes each question to the correct ECU manual family using rule-based classification.
+Automatically routes each query to the correct ECU manual family.
 
-### ✔ Local Phi-3 LLM  
-Runs fully offline using `microsoft/Phi-3-mini-4k-instruct` on CPU or Apple Silicon (MPS + BF16).
+### ✔ Configurable LLM Backend
+Supports two interchangeable inference modes:
 
-### ✔ Efficient Vector Search  
-Uses HuggingFace embeddings + Chroma vectorstore for high-recall context retrieval.
+| Backend           | Description                                                       |
+|-------------------|-------------------------------------------------------------------|
+| `local` (default) | Runs `microsoft/Phi-3-mini-4k-instruct` locally                   |
+| `remote`          | Calls a free HuggingFace-hosted LLM (e.g., Llama-3.2-1B-Instruct) |
+
+Switch by environment variable:
+```bash
+export LLM_BACKEND=local      # or: remote
+```
+
+### ✔ Efficient Vector Retrieval
+HuggingFace embeddings + in-memory Chroma.
 
 ### ✔ Modular LangGraph Workflow  
-Separates concerns: routing → retrieval → answer generation.
+Clean separation: routing → retrieval → answer generation.
 
 ### ✔ MLflow Model Packaging  
-Exports the entire pipeline as a custom pyfunc model with versioning + prod alias.
+Exports the entire pipeline as a custom pyfunc model with versioning + ```prod``` alias.
 
 ### ✔ REST API with FastAPI  
-Provides a standard /predict endpoint.
+Provides standard ```/predict``` endpoint served from MLflow model.
 
 ### ⚪ Docker (Experimental)  
 A Dockerfile is provided as a **work-in-progress template**.  
@@ -93,12 +104,12 @@ me-engineering-assistant/
 │       ├── sandbox_test.py        # Simple local CLI test
 │       └── vectorstore.py         # Embeddings + vectorstore builder
 │
-└── tests/
+└── tests
+    ├── benchmark.py               # Benchmark verification
     └── test_agent_e2e.py          # End-to-end verification
 ```
 
 ---
-
 
 ## 🧠 4. System Architecture
 
@@ -135,20 +146,51 @@ pip install -e .
 
 ---
 
-## 🚀 6. Running Locally (CLI)
+## 🌐 6. LLM Backend Configuration
 
+### 6.1 Local Phi-3 (default)
 ```bash
-python -m me_engineering_assistant.sandbox_test
+export LLM_BACKEND=local
+export LLM_MODEL_NAME="microsoft/Phi-3-mini-4k-instruct"
 ```
-Example output:
-```vbnet
-Question: What is the maximum operating temperature for the ECU-850b?
-Answer: The maximum operating temperature for the ECU-850b is +105°C.
+### 6.2 Remote free open-source LLM (HuggingFace Inference API)
+```bash
+export LLM_BACKEND=remote
+export HUGGINGFACEHUB_API_TOKEN="hf_xxx"
+export REMOTE_LLM_MODEL_NAME="meta-llama/Llama-3.2-1B-Instruct"
 ```
+All entrypoints (CLI, FastAPI, MLflow logging) obey these settings.
 
 ---
 
-## 🌐 7. Start the FastAPI Server
+## 🚀 7. MLflow Model Logging
+Before serving the API, you must register the MLflow model.
+
+### 7.1 Set tracking URI
+```bash
+export MLFLOW_TRACKING_URI="file:$(pwd)/mlruns"
+```
+### 7.2 Log the model
+```bash
+python -m me_engineering_assistant.log_model
+```
+This will:
+- Run the complete pipeline (routing → RAG → LLM)
+- Log a new MLflow model version
+- Update the prod alias
+
+Example output:
+```bash
+Created version '8' of model 'me-engineering-assistant'
+alias = prod
+```
+
+Recommended model URI:
+```bash
+models:/me-engineering-assistant@prod
+```
+
+## 🌐 8. Start the FastAPI Server
 
 ```bash
 python -m me_engineering_assistant
@@ -160,9 +202,9 @@ http://localhost:8000/predict
 
 ---
 
-## 📡 8. Example API Requests
+## 📡 9. Example API Requests
 
-### 8.1 cURL
+### 9.1 cURL
 
 ```bash
 curl -X POST http://localhost:8000/predict \
@@ -170,7 +212,7 @@ curl -X POST http://localhost:8000/predict \
      -d '{"questions": ["What is the maximum operating temperature of the ECU-850b?"]}'
 ```
 
-### 8.2 Python
+### 9.2 Python
 
 ```python
 import requests
@@ -182,7 +224,7 @@ resp = requests.post(
 print(resp.json())
 ```
 
-### 8.3 Postman
+### 9.3 Postman
 
 * POST ```http://localhost:8000/predict```
 * Body (JSON)
@@ -194,91 +236,60 @@ print(resp.json())
 
 ---
 
-## 📦 9. MLflow Model Logging & Loading
+## 🧪 10. Testing & Validation Strategy (Local & Remote LLM Backends)
 
-### Log the model
+This project uses a two-layer testing strategy to validate functional correctness and real-world performance across both LLM backends:
+
+- Local backend: Phi-3-Mini (offline, deterministic latency, high correctness)
+- Remote backend: Llama-3.x via Hugging Face Inference API (online, low latency, rate-limited)
+
+All tests work with either backend and automatically respect the environment variable:
 ```bash
-python -m me_engineering_assistant.log_model
+export LLM_BACKEND=local    # or: remote
 ```
-This will:
-- Log the full agent pipeline
-- Create a new version in MLflow Model Registry
-- Update the prod alias
-
-Example output:
-```bash
-Created version '7' of model 'me-engineering-assistant'
-alias = prod
-```
-
-### Recommended MODEL_URI for serving
-```bash
-models:/me-engineering-assistant@prod
-```
-
-### Load the model in Python
-```python
-import mlflow.pyfunc
-model = mlflow.pyfunc.load_model("models:/me-engineering-assistant@prod")
-```
-
-### FastAPI with MODEL_URI
-```bash
-export MODEL_URI="models:/me-engineering-assistant@prod"
-python -m me_engineering_assistant
-```
-
----
-
-## 🧪 10. Testing & Validation Strategy
-
-This project uses a two-layer testing strategy to validate both functionality and real-world performance of the agent.
 
 ### 10.1 Functional Testing (Pytest)
 
-A streamlined end-to-end test (`tests/test_agent_e2e.py`) verifies that the agent can correctly answer the majority of questions in `test-questions.csv`.
+The end-to-end pytest (```tests/test_agent_e2e.py```) validates that the agent answers the majority of evaluation questions correctly.
 
 The test performs the following:
 
-- Loads all evaluation questions from the CSV file  
-- Runs the complete agent pipeline (routing → retrieval → Phi-3 generation)  
-- Records per-query latency  
-- Counts how many answers are non-fallback responses  
-- Ensures **at least 80% answer accuracy**, as required by the challenge
+- Loads all questions from test-questions.csv
+- Runs the full pipeline (routing → retrieval → LLM generation)
+- Records per-query latency
+- Counts how many answers are non-fallback
+- Ensures ≥ 80% accuracy, meeting the challenge requirement
 
-Run the test:
+**Run the test**
+
 ```bash
 pytest -q -s
 ```
 
-Sample output:
-```bash
-=== ME Engineering Assistant: E2E Benchmark ===
-01. [OK ] 4.93s - What is the maximum operating temperature for the ECU-750?
-...
-Summary:
-- Questions      : 10
-- Answered       : 10 (100%)
-- Avg time / q   : 12.91s
-- Max time / q   : 29.23s
-```
-This confirms both correctness and overall stability of the RAG + LLM pipeline.
+**Behavior by backend**
+
+| Backend                | Typical Accuracy | Latency Pattern                                |
+|------------------------|------------------|------------------------------------------------|
+| **local (Phi-3-Mini)** | 90–100%          | Higher latency due to local model inference    |
+| **remote (Llama-3.x)** | 80–90%           | Much faster (1–3s), occasional API variability |
+
 
 ### 10.2 Performance & Answer Inspection (Benchmark Script)
 
-A dedicated benchmark script is provided for detailed inspection of:
+A dedicated benchmark script (tests/benchmark.py) provides deeper inspection of:
 
-- The exact answer returned for each question
-- End-to-end latency per query
-- Overall accuracy
-- Totals and summary metrics
+- Raw answers returned by the system
+- End-to-end latency per question
+- Total runtime and accuracy
+- Differences between local and remote backends
 
-Run the benchmark:
+**Run the benchmark**
+
 ```bash
 python -m tests.benchmark
 ```
 
-Example output:
+**Example (local backend)**
 ```bash
 01. [OK ] 4.82s
     Q: How much RAM does the ECU-850 have?
@@ -289,46 +300,110 @@ Summary:
 - Answered          : 10 (100%)
 - Avg time / q      : 11.03s
 - Max time / q      : 23.77s
-- Total runtime     : 110.28s
 ```
-This script is intended for human inspection and performance reporting, and is not part of the automated pytest suite.
 
-### 10.3 Validation Criteria
+**Example (remote backend)**
+```bash
+01. [OK ] 1.13s
+    Q: How much RAM does the ECU-850 have?
+    A: The ECU-850 has 2 GB of RAM.
+...
+Summary:
+- Questions         : 10
+- Answered          : 8 (80%)
+- Avg time / q      : 2.14s
+- Max time / q      : 9.87s
+```
+Notes:
 
-The agent is considered valid when:
+- Remote backend is much faster (1–3s)
+- Local backend is more consistent, especially for complex comparative questions
 
-- ≥ 80% of questions receive a non-fallback answer (functional correctness)
-- Average latency remains within practical limits for local Phi-3 inference
-- No runtime errors occur across the full question set
+
+### 10.3 Validation Criteria (Backend-Aware)
+The agent is considered valid when **either backend** meets:
+
+✔ **Functional correctness**
+- ≥ 80% non-fallback answers over the 10-question evaluation set
+- No hallucinated information when context is unclear
+- Router selects correct document families
+
+✔ **Performance expectations**
+
+| Backend                | Acceptable Latency | Notes                               |
+|------------------------|--------------------|-------------------------------------|
+| **Local (Phi-3)**      | Avg ≤ 20–30s       | Includes warm-up + local inference  |
+| **Remote (Llama-3.x)** | Avg ≤ 3–5s         | Subject to internet/API variability |
+
+✔ **Stability**
+- No runtime errors across all evaluation questions
+- Behavior must remain deterministic given the same backend
 
 ---
 
 ## 🐳 11. Containerization (Experimental)
 
-A Dockerfile is included as a template, but not yet fully validated.
+A Dockerfile is included as a template.
+The container can serve the agent using either LLM backend:
 
-Example usage:
+- Local: Phi-3-mini model loaded via transformers
+- Remote: Llama-3.x hosted on HuggingFace Inference API (free tier compatible)
+
+**Build image**
+
 ```bash
 docker build -t me-assistant .
+```
+
+**Local backend(default)**:
+
+This mode runs completely offline and loads the Phi-3 model inside the container.
+
+```bash
 docker run -p 8000:8000 \
+    -e MLFLOW_TRACKING_URI=file:/app/mlruns \
     -e MODEL_URI=models:/me-engineering-assistant@prod \
+    -e LLM_BACKEND=local \
     me-assistant
 ```
 
-Areas requiring further work:
-- Preloading Phi-3 model
-- MLflow filesystem mounting
-- Performance tuning inside container
+**Remote backend(online open-source LLM)**:
+
+This mode uses HuggingFace Inference API and requires an API token.
+
+```bash
+docker run -p 8000:8000 \
+    -e MLFLOW_TRACKING_URI=file:/app/mlruns \
+    -e MODEL_URI=models:/me-engineering-assistant@prod \
+    -e LLM_BACKEND=remote \
+    -e REMOTE_LLM_MODEL_NAME="meta-llama/Llama-3.2-1B-Instruct" \
+    -e HUGGINGFACEHUB_API_TOKEN=hf_xxx \
+    me-assistant
+```
 
 ---
 
 ## ⚠️ 12. Limitations
 
-- Phi-3 may hallucinate on ambiguous questions
-- Router is rule-based (no embedding classifier yet)
-- Vectorstore rebuilt at runtime (non-persistent)
-- Docker build still experimental
-- No streaming answer support
+### LLM-related
+
+- Local backend (Phi-3)
+
+    - Highest correctness but slower inference
+    - May hallucinate under ambiguous context
+
+- Remote backend (Llama-3.x)
+
+    - Lower latency but dependent on HuggingFace API rate limits
+    - Occasional fallback responses when API returns minimal content
+
+### System limitations
+
+- Router is rule-based (no embedding classifier yet
+- Vectorstore is rebuilt at runtime (non-persistent)
+- Docker image still experimental
+- No streaming inference
+- Remote backend adds external dependency (network + HF API availability)
 
 ---
 
@@ -336,44 +411,58 @@ Areas requiring further work:
 
 ### MLOps Enhancements
 
-- Fully hardened Docker deployment
-- MLflow model serving (```mlflow models serve```)
-- Upgrade to SQLite/Postgres backend
-
+- Fully validated Docker deployment
+- MLflow-native model serving (mlflow models serve)
+- Cloud-ready tracking server (SQLite / Postgres)
+- GPU-enabled images for faster local inference
 
 ### Agent Improvements
 
-- Embedding-based router classifier
-- Human-in-the-loop validation
-- Multi-step reasoning with tool use
-- Support more ECU manual families
+- Embedding-based router
+- Confidence scoring + fallback arbitration
+- Multi-hop reasoning
+- Support additional ECU model families
 
 ### Retrieval Performance
 
-- Persistent FAISS/Chroma index
-- Quantized Phi-3 for faster inference
+- Persistent FAISS / Chroma index
+- Chunk-level re-ranking (Cross-Encoder)
+- Hybrid sparse + dense retrieval
+- Quantized LLMs for faster local inference
+
+### LLM Backend Enhancements
+
+- Intelligent backend selection (dynamic switch local ↔ remote)
+- Caching of remote responses
+- Automatic degradation policy (handle API rate limits gracefully)
 
 ---
 
 ## 🏁 14. Challenge Requirements Alignment
 
-| Requirement                 | Status                                 |
-| --------------------------- | -------------------------------------- |
-| Multi-source RAG            | ✔ Implemented                          |
-| Intelligent routing         | ✔ Router node                          |
-| LangGraph agent             | ✔ Two-node workflow                    |
-| MLflow model logging        | ✔ Custom pyfunc, versioned, prod alias |
-| REST API                    | ✔ FastAPI `/predict`                   |
-| Dockerization               | ⚪ Template included (experimental)     |
-| Architectural documentation | ✔ Included                             |
-| Testing strategy            | ✔ Automated + proposed framework       |
-| Limitations & future work   | ✔ Documented                           |
+| Requirement                 | Status                                           |         |
+|-----------------------------|--------------------------------------------------|---------|
+| Multi-source RAG            | ✔ Implemented                                    |         |
+| Intelligent routing         | ✔ Router node                                    |         |
+| LangGraph agent             | ✔ Two-node workflow (router → RAG)               |         |
+| MLflow model logging        | ✔ Custom pyfunc, versioned, prod alias           |         |
+| REST API                    | ✔ FastAPI `/predict` loading MLflow model        |         |
+| Dockerization               | ⚪ Template included (supports both LLM backends) |         |
+| Local LLM inference         | ✔ Phi-3-mini (offline)                           |         |
+| Online LLM inference        | ✔ Llama-3.x via HuggingFace API (free)           |         |
+| Backend configurability     | ✔ `LLM_BACKEND=local                             | remote` |
+| Architectural documentation | ✔ Included                                       |         |
+| Testing strategy            | ✔ Local + Remote benchmarks & pytest             |         |
+| Limitations & future work   | ✔ Documented                                     |         |
+
 
 ---
 
 ## 🙌 Acknowledgements
 
-- Microsoft Phi-3 Model
+- Microsoft Phi-3
+- Meta Llama 3.x
+- HuggingFace Inference API
 - LangChain / LangGraph
 - MLflow
 - ChromaDB

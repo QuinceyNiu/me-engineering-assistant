@@ -2,16 +2,25 @@
 from __future__ import annotations
 
 from typing import Dict, List, Optional
+import os
 import re
 
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
+from huggingface_hub import InferenceClient
 
-from .config import TOP_K, LLM_MODEL_NAME, MAX_NEW_TOKENS
+from .config import (
+    TOP_K,
+    LLM_MODEL_NAME,
+    MAX_NEW_TOKENS,
+    LLM_BACKEND,
+    REMOTE_LLM_MODEL_NAME,
+    HF_TOKEN_ENV_VAR,
+)
 
 
 # ---------------------------------------------------------------------------
-# Lazy-loaded local LLM
+# Global state for local and remote backends
 # ---------------------------------------------------------------------------
 
 _DEVICE: Optional[str] = None
@@ -19,14 +28,16 @@ _DTYPE: Optional[torch.dtype] = None
 _TOKENIZER: Optional[AutoTokenizer] = None
 _MODEL: Optional[AutoModelForCausalLM] = None
 
+_REMOTE_CLIENT: Optional[InferenceClient] = None
+
 
 def _select_device_and_dtype() -> tuple[str, torch.dtype]:
     """
     Select the best available device and an appropriate dtype.
 
-    - Prefer Apple Silicon (MPS) when available
-    - Otherwise try CUDA
-    - Fallback to CPU
+    - Prefer Apple Silicon (MPS) when available.
+    - Otherwise use CUDA if available.
+    - Fallback to CPU.
     """
     if torch.backends.mps.is_available():
         device = "mps"
@@ -35,18 +46,17 @@ def _select_device_and_dtype() -> tuple[str, torch.dtype]:
     else:
         device = "cpu"
 
-    # BF16 works well on MPS/CUDA; fall back to FP32 on CPU
+    # BF16 works well on MPS/CUDA; fall back to FP32 on CPU.
     dtype = torch.bfloat16 if device in {"mps", "cuda"} else torch.float32
     return device, dtype
 
 
-def _ensure_model_loaded() -> None:
+def _ensure_local_model_loaded() -> None:
     """
-    Lazily load the tokenizer and model on first use.
+    Lazily load the local Phi-3 (or any configured) model.
 
-    This avoids heavy initialization at module import time and is friendlier
-    for environments where the module may be imported without ever running
-    inference (e.g., static analysis, certain test setups).
+    This is only used when LLM_BACKEND == "local". The model is kept in
+    process-wide globals so that repeated calls reuse the same instance.
     """
     global _DEVICE, _DTYPE, _TOKENIZER, _MODEL
 
@@ -56,10 +66,16 @@ def _ensure_model_loaded() -> None:
     device, dtype = _select_device_and_dtype()
     _DEVICE, _DTYPE = device, dtype
 
-    print(f"[RAG] Loading local LLM '{LLM_MODEL_NAME}' on device: {device}, dtype: {dtype}")
+    print(
+        f"[RAG] Using LOCAL LLM backend. "
+        f"Loading '{LLM_MODEL_NAME}' on device: {device}, dtype: {dtype}"
+    )
 
     tokenizer = AutoTokenizer.from_pretrained(LLM_MODEL_NAME)
-    model = AutoModelForCausalLM.from_pretrained(LLM_MODEL_NAME, dtype=dtype)
+    model = AutoModelForCausalLM.from_pretrained(
+        LLM_MODEL_NAME,
+        dtype=dtype,
+    )
 
     model.to(device)
     model.eval()
@@ -68,24 +84,50 @@ def _ensure_model_loaded() -> None:
     _MODEL = model
 
 
+def _ensure_remote_client_loaded() -> None:
+    """
+    Lazily create a Hugging Face InferenceClient for the remote backend.
+
+    This uses the free Hugging Face Inference API (within its rate limits).
+    The user must provide an API token via environment variable.
+    """
+    global _REMOTE_CLIENT
+
+    if _REMOTE_CLIENT is not None:
+        return
+
+    # Try the configured env var first, then fall back to HF_TOKEN for
+    # convenience if users already have that set.
+    token = os.getenv(HF_TOKEN_ENV_VAR) or os.getenv("HF_TOKEN")
+    if not token:
+        raise RuntimeError(
+            f"Hugging Face API token not found. Please set '{HF_TOKEN_ENV_VAR}' "
+            f"or 'HF_TOKEN' when using LLM_BACKEND='remote'."
+        )
+
+    print(
+        "[RAG] Using REMOTE LLM backend via Hugging Face Inference API.\n"
+        f"      Model: {REMOTE_LLM_MODEL_NAME}"
+    )
+
+    _REMOTE_CLIENT = InferenceClient(
+        model=REMOTE_LLM_MODEL_NAME,
+        token=token,
+    )
+
+
 # ---------------------------------------------------------------------------
-# Prompt construction and answer generation
+# Prompt construction and answer generation (backend-agnostic)
 # ---------------------------------------------------------------------------
 
 
 def _build_prompt(question: str, context: str) -> str:
     """
-    Build the prompt for the local LLM.
+    Build a plain-text prompt that works for both local and remote models.
 
-    For models that support chat templates (such as Phi-3-mini-instruct),
-    prioritize constructing prompts using `apply_chat_template`. If that fails,
-    fall back to a simple manually written text template.
+    We intentionally avoid using tokenizer-specific chat templates here so
+    that the same prompt can be sent to either backend.
     """
-    _ensure_model_loaded()
-    assert _TOKENIZER is not None  # for type checkers
-
-    tokenizer = _TOKENIZER
-
     system_msg = (
         'You are the "ME Engineering Assistant", an ECU technical expert. '
         "Answer strictly based on the provided ECU manual context. "
@@ -98,23 +140,8 @@ def _build_prompt(question: str, context: str) -> str:
         "Answer in concise, professional English for an engineer."
     )
 
-    messages = [
-        {"role": "system", "content": system_msg},
-        {"role": "user", "content": user_msg},
-    ]
-
-    # Prefer a chat template when available
-    try:
-        prompt = tokenizer.apply_chat_template(
-            messages,
-            tokenize=False,
-            add_generation_prompt=True,
-        )
-        return prompt
-    except Exception:  # pylint: disable=broad-exception-caught
-        # Some model/tokenizer combinations may not support chat templates.
-        # In that case, fall back to a simple, explicit text prompt.
-        return system_msg + "\n\n" + user_msg + "\n\nAnswer:"
+    prompt = system_msg + "\n\n" + user_msg + "\n\nAnswer:"
+    return prompt
 
 
 def _generate_llm_answer(
@@ -122,37 +149,101 @@ def _generate_llm_answer(
     max_new_tokens: int = MAX_NEW_TOKENS,
 ) -> str:
     """
-    Invoke the local LLM to generate the answer.
+    Invoke the selected LLM backend (local or remote) to generate the answer.
 
     From the full output text, extract the most answer-like sentence and
     return it. This keeps the response concise and easier to evaluate
     automatically.
     """
-    _ensure_model_loaded()
-    assert _TOKENIZER is not None
-    assert _MODEL is not None
-    assert _DEVICE is not None
+    # ------------------------------------------------------------------
+    # 1) Call the appropriate backend to get the raw generated text
+    # ------------------------------------------------------------------
+    if LLM_BACKEND == "remote":
+        # Online open-source model via Hugging Face Inference API
+        _ensure_remote_client_loaded()
+        assert _REMOTE_CLIENT is not None
+        client = _REMOTE_CLIENT
 
-    tokenizer = _TOKENIZER
-    model = _MODEL
-    device = _DEVICE
+        try:
+            # First try the plain text-generation endpoint.
+            full_text = client.text_generation(
+                prompt,
+                max_new_tokens=max_new_tokens,
+                temperature=0.0,
+                do_sample=False,
+            )
+            if isinstance(full_text, str):
+                full_text = full_text.strip()
+            else:
+                full_text = str(full_text).strip()
+        except ValueError as exc:
+            # Some providers (e.g., for Llama 3.2 instruct models) only expose
+            # the "conversational" task. In that case, fall back to the
+            # chat_completion API, which uses an OpenAI-style chat format.
+            msg = str(exc).lower()
+            if "conversational" not in msg:
+                # If the error is unrelated, surface it to the caller.
+                raise
 
-    inputs = tokenizer(prompt, return_tensors="pt").to(device)
+            # Use a simple system + user message layout. The system message
+            # encodes the assistant's role; the user message contains the
+            # full prompt including context and question.
+            system_prompt = (
+                'You are the "ME Engineering Assistant", an ECU technical expert. '
+                "Answer strictly based on the provided ECU manual context. "
+                'If the answer is not present in the context, reply exactly: '
+                '"The manual does not provide this information."'
+            )
 
-    with torch.no_grad():
-        outputs = model.generate(
-            **inputs,
-            max_new_tokens=max_new_tokens,
-            do_sample=False,
-        )
+            chat_response = client.chat_completion(
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": prompt},
+                ],
+                max_tokens=max_new_tokens,
+                temperature=0.0,
+            )
 
-    full_text = tokenizer.decode(outputs[0], skip_special_tokens=True).strip()
+            # InferenceClient returns an object with an OpenAI-like structure.
+            choice = chat_response.choices[0]
+            message = getattr(choice, "message", None)
+            if isinstance(message, dict):
+                full_text = str(message.get("content", "")).strip()
+            else:
+                # Fallback for the dataclass-style message object
+                content = getattr(message, "content", "")
+                full_text = str(content).strip()
 
-    # If an assistant tag is present, prioritize the portion after it.
-    for key in ["", "Assistant:", "assistant:"]:
-        if key and key in full_text:
-            full_text = full_text.split(key, 1)[-1].strip()
-            break
+        # At this point, the remote branch has retrieved full_text.
+        # The subsequent sentence splitting logic remains unchanged.
+    else:
+        # Local Phi-3 (or any local model configured via LLM_MODEL_NAME)
+        _ensure_local_model_loaded()
+        assert _TOKENIZER is not None
+        assert _MODEL is not None
+        assert _DEVICE is not None
+
+        tokenizer = _TOKENIZER
+        model = _MODEL
+        device = _DEVICE
+
+        inputs = tokenizer(prompt, return_tensors="pt").to(device)
+
+        with torch.no_grad():
+            outputs = model.generate(
+                **inputs,
+                max_new_tokens=max_new_tokens,
+                do_sample=False,
+            )
+
+        full_text = tokenizer.decode(outputs[0], skip_special_tokens=True).strip()
+
+    # ------------------------------------------------------------------
+    # 2) Post-process: extract the best candidate sentence as final answer
+    # ------------------------------------------------------------------
+
+    if not full_text:
+        return "The manual does not provide this information."
 
     # Split into sentences using ., ?, ! while preserving delimiters.
     parts = re.split(r"([\.?!])", full_text)
@@ -216,9 +307,10 @@ def rag_answer(
     """
     Perform retrieval-augmented generation:
 
-    - Retrieve similar fragments from the selected vector libraries
-    - Concatenate the context
-    - Invoke the local LLM to generate the final answer
+    - Retrieve similar fragments from the selected vector libraries.
+    - Concatenate the context.
+    - Invoke the selected LLM backend (local or remote) to generate
+      the final answer.
     """
     docs = []
     for route in routes:
@@ -229,8 +321,7 @@ def rag_answer(
         return "The manual does not provide this information."
 
     # Concatenate the context while avoiding duplicated fragments and
-    # overly long prompts. The current limit is a pragmatic choice based
-    # on the small size of the manuals and Phi-3 context length.
+    # overly long prompts.
     context_parts: List[str] = []
     seen = set()
     for d in docs:
@@ -238,6 +329,7 @@ def rag_answer(
             seen.add(d.page_content)
             context_parts.append(d.page_content)
 
+    # For these small manuals, 6–8 chunks are usually enough.
     context = "\n\n---\n\n".join(context_parts[:8])
 
     prompt = _build_prompt(question, context)

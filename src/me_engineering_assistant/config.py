@@ -53,3 +53,25 @@ LLM_MODEL_NAME = os.getenv("LLM_MODEL_NAME", DEFAULT_LLM_MODEL_NAME)
 # Limit the number of generated tokens to keep latency within the challenge
 # expectations while still allowing sufficiently detailed answers.
 MAX_NEW_TOKENS = int(os.getenv("LLM_MAX_NEW_TOKENS", "96"))
+
+
+# ---------------------------------------------------------------------------
+# LLM backend selection
+# ---------------------------------------------------------------------------
+
+# LLM_BACKEND controls whether we use a local model or an online model.
+# - "local": use the local Phi-3 model via transformers (default)
+# - "remote": use a remote open-source model via Hugging Face Inference API
+LLM_BACKEND = os.getenv("LLM_BACKEND", "local").lower()
+
+# Default remote model for the online backend (must be a text-generation model
+# available on Hugging Face Hub). You can override this via environment
+# variable if you want to experiment with other models.
+REMOTE_LLM_MODEL_NAME = os.getenv(
+    "REMOTE_LLM_MODEL_NAME",
+    "meta-llama/Llama-3.2-1B-Instruct",
+)
+
+# Environment variable name that should contain the Hugging Face API token.
+# The token is required when using the online backend.
+HF_TOKEN_ENV_VAR = "HUGGINGFACEHUB_API_TOKEN"
