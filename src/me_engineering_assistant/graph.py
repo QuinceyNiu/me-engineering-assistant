@@ -1,3 +1,6 @@
+# src/me_engineering_assistant/graph.py
+from __future__ import annotations
+
 from typing import Dict, List, TypedDict
 
 from langgraph.graph import END, StateGraph
@@ -9,39 +12,53 @@ from .vectorstore import build_vectorstores
 
 class AgentState(TypedDict):
     """State container flowing through the LangGraph workflow."""
+
     question: str
     routes: List[str]
     answer: str
     metadata: Dict
 
 
-# Build the vector library once during module loading
-# (sufficient for small data scenarios)
-VECTORSTORES = build_vectorstores()
+# In-memory cache for the vectorstores. This is built lazily on first access
+# and reused for all subsequent queries within the same process.
+_VECTORSTORES: Dict[str, object] | None = None
+
+
+def get_vectorstores() -> Dict[str, object]:
+    """
+    Lazily build and cache the vectorstores.
+
+    For the small ECU manuals used in this challenge it is reasonable to keep
+    the in-memory vectorstores for the lifetime of the process.
+    """
+    global _VECTORSTORES
+
+    if _VECTORSTORES is None:
+        _VECTORSTORES = build_vectorstores()
+
+    return _VECTORSTORES
 
 
 def router_node(state: AgentState) -> AgentState:
-    """LangGraph node: route based on the query."""
+    """LangGraph node: classify which ECU manuals are relevant for the query."""
     decision = route_question(state["question"])
-
     state["routes"] = decision["routes"]
     state.setdefault("metadata", {})
     state["metadata"]["routing_reason"] = decision["reason"]
-
     return state
 
 
 def rag_node(state: AgentState) -> AgentState:
     """LangGraph node: perform RAG based on routing to generate responses."""
-    routes = state.get("routes") or list(VECTORSTORES.keys())
-    answer = rag_answer(state["question"], VECTORSTORES, routes)
-
+    vs_dict = get_vectorstores()
+    routes = state.get("routes") or list(vs_dict.keys())
+    answer = rag_answer(state["question"], vs_dict, routes)
     state["answer"] = answer
     return state
 
 
 def build_agent_graph():
-    """Build the LangGraph workflow."""
+    """Build and compile the LangGraph workflow."""
     graph = StateGraph(AgentState)
 
     graph.add_node("router", router_node)
@@ -54,19 +71,18 @@ def build_agent_graph():
     return graph.compile()
 
 
-# ✅ Compile the workflow once at module import time and reuse it
+# Compile the workflow once at module import time and reuse it.
 WORKFLOW = build_agent_graph()
 
 
 def run_agent(question: str) -> AgentState:
     """
-    Exposed simple interface:
-    Given a query, return the final state.
+    Convenience entrypoint for running the agent.
 
-    The state contains:
-      - "answer":  The final response
-      - "routes":  Which document collections were used
-      - "metadata": Such as routing reasons
+    The returned state contains:
+    - "answer": final response string
+    - "routes": which document collections were used
+    - "metadata": additional information such as routing reasons
     """
     final_state: AgentState = WORKFLOW.invoke(
         {

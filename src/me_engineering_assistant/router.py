@@ -1,4 +1,5 @@
 # src/me_engineering_assistant/router.py
+from __future__ import annotations
 
 from typing import List, Literal, TypedDict
 
@@ -6,15 +7,21 @@ RouteName = Literal["ECU-700", "ECU-800-base", "ECU-800-plus"]
 
 
 class RoutingDecision(TypedDict):
+    """
+    Result of the routing step.
+
+    - routes: list of document collections that should be queried
+    - reason: human-readable explanation that can be logged or inspected
+    """
+
     routes: List[RouteName]
-    need_both: bool
     reason: str
 
 
-# Perform simple keyword matching based on file content:
+# Perform simple keyword matching based on known ECU model mentions.
 # - ECU-700 Series: ECU-750, ECU-700
-# - ECU-800-base: ECU-850, ECU-800
-# - ECU-800-plus: ECU-850b, plus version
+# - ECU-800-base:  ECU-850, ECU-800
+# - ECU-800-plus:  ECU-850b, "plus" variant
 DOC_KEYWORDS = {
     "ECU-700": ["750", "700", "ecu 750", "ecu-750", "ecu700"],
     "ECU-800-base": ["850", "800", "ecu 850", "ecu-850", "ecu800"],
@@ -24,9 +31,11 @@ DOC_KEYWORDS = {
 
 def route_question(question: str) -> RoutingDecision:
     """
-    No LLM required—use keywords for simple routing:
-    - Match a keyword to select the corresponding document collection
-    - If no keywords match, default to all collections and let RAG handle filtering
+    Perform rule-based routing without an LLM.
+
+    - Match a keyword to select the corresponding document collection.
+    - If no keywords match, default to all collections and let RAG handle
+      filtering based on embeddings and similarity search.
     """
     q = question.lower()
     selected: List[RouteName] = []
@@ -36,7 +45,7 @@ def route_question(question: str) -> RoutingDecision:
             selected.append(route)  # type: ignore[arg-type]
 
     if not selected:
-        # No matches found at all, so catch all
+        # No matches found at all, so fall back to all manuals.
         selected = ["ECU-700", "ECU-800-base", "ECU-800-plus"]  # type: ignore[assignment]
         reason = "No strong keyword match, falling back to all docs."
     else:
@@ -44,6 +53,5 @@ def route_question(question: str) -> RoutingDecision:
 
     return {
         "routes": selected,
-        "need_both": len(selected) > 1,
         "reason": reason,
     }

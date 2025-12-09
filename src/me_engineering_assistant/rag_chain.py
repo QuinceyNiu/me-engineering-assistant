@@ -1,46 +1,97 @@
 # src/me_engineering_assistant/rag_chain.py
-from typing import Dict, List
+from __future__ import annotations
+
+from typing import Dict, List, Optional
 import re
 
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from .config import TOP_K
+from .config import TOP_K, LLM_MODEL_NAME, MAX_NEW_TOKENS
 
 
-MODEL_NAME = "microsoft/Phi-3-mini-4k-instruct"
+# ---------------------------------------------------------------------------
+# Lazy-loaded local LLM
+# ---------------------------------------------------------------------------
 
-if torch.backends.mps.is_available():
-    DEVICE = "mps"
-else:
-    DEVICE = "cpu"
+_DEVICE: Optional[str] = None
+_DTYPE: Optional[torch.dtype] = None
+_TOKENIZER: Optional[AutoTokenizer] = None
+_MODEL: Optional[AutoModelForCausalLM] = None
 
-DTYPE = torch.bfloat16 if DEVICE == "mps" else torch.float32
 
-print(f"[RAG] Loading local LLM '{MODEL_NAME}' on device: {DEVICE}, dtype: {DTYPE}")
+def _select_device_and_dtype() -> tuple[str, torch.dtype]:
+    """
+    Select the best available device and an appropriate dtype.
 
-tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
-model = AutoModelForCausalLM.from_pretrained(
-    MODEL_NAME,
-    torch_dtype=DTYPE,
-)
-model.to(DEVICE)
-model.eval()
+    - Prefer Apple Silicon (MPS) when available
+    - Otherwise try CUDA
+    - Fallback to CPU
+    """
+    if torch.backends.mps.is_available():
+        device = "mps"
+    elif torch.cuda.is_available():
+        device = "cuda"
+    else:
+        device = "cpu"
+
+    # BF16 works well on MPS/CUDA; fall back to FP32 on CPU
+    dtype = torch.bfloat16 if device in {"mps", "cuda"} else torch.float32
+    return device, dtype
+
+
+def _ensure_model_loaded() -> None:
+    """
+    Lazily load the tokenizer and model on first use.
+
+    This avoids heavy initialization at module import time and is friendlier
+    for environments where the module may be imported without ever running
+    inference (e.g., static analysis, certain test setups).
+    """
+    global _DEVICE, _DTYPE, _TOKENIZER, _MODEL
+
+    if _MODEL is not None and _TOKENIZER is not None:
+        return
+
+    device, dtype = _select_device_and_dtype()
+    _DEVICE, _DTYPE = device, dtype
+
+    print(f"[RAG] Loading local LLM '{LLM_MODEL_NAME}' on device: {device}, dtype: {dtype}")
+
+    tokenizer = AutoTokenizer.from_pretrained(LLM_MODEL_NAME)
+    model = AutoModelForCausalLM.from_pretrained(LLM_MODEL_NAME, dtype=dtype)
+
+    model.to(device)
+    model.eval()
+
+    _TOKENIZER = tokenizer
+    _MODEL = model
+
+
+# ---------------------------------------------------------------------------
+# Prompt construction and answer generation
+# ---------------------------------------------------------------------------
 
 
 def _build_prompt(question: str, context: str) -> str:
     """
+    Build the prompt for the local LLM.
+
     For models that support chat templates (such as Phi-3-mini-instruct),
-    prioritize constructing prompts using `apply_chat_template`.
-    If that fails, fall back to manually written text templates.
+    prioritize constructing prompts using `apply_chat_template`. If that fails,
+    fall back to a simple manually written text template.
     """
+    _ensure_model_loaded()
+    assert _TOKENIZER is not None  # for type checkers
+
+    tokenizer = _TOKENIZER
+
     system_msg = (
         'You are the "ME Engineering Assistant", an ECU technical expert. '
         "Answer strictly based on the provided ECU manual context. "
         'If the answer is not present in the context, reply exactly: '
         '"The manual does not provide this information."'
     )
-
     user_msg = (
         f"CONTEXT:\n{context}\n\n"
         f"QUESTION:\n{question}\n\n"
@@ -52,7 +103,7 @@ def _build_prompt(question: str, context: str) -> str:
         {"role": "user", "content": user_msg},
     ]
 
-    # Prioritize chat template
+    # Prefer a chat template when available
     try:
         prompt = tokenizer.apply_chat_template(
             messages,
@@ -61,16 +112,33 @@ def _build_prompt(question: str, context: str) -> str:
         )
         return prompt
     except Exception:  # pylint: disable=broad-exception-caught
-        # Fallback: return the concatenated prompt
+        # Some model/tokenizer combinations may not support chat templates.
+        # In that case, fall back to a simple, explicit text prompt.
         return system_msg + "\n\n" + user_msg + "\n\nAnswer:"
 
 
-def _generate_llm_answer(prompt: str, max_new_tokens: int = 128) -> str:
+def _generate_llm_answer(
+    prompt: str,
+    max_new_tokens: int = MAX_NEW_TOKENS,
+) -> str:
     """
-    Invoke the local LLM to generate the answer, extract the “most answer-like
-    sentence” from the full output, and return it.
+    Invoke the local LLM to generate the answer.
+
+    From the full output text, extract the most answer-like sentence and
+    return it. This keeps the response concise and easier to evaluate
+    automatically.
     """
-    inputs = tokenizer(prompt, return_tensors="pt").to(DEVICE)
+    _ensure_model_loaded()
+    assert _TOKENIZER is not None
+    assert _MODEL is not None
+    assert _DEVICE is not None
+
+    tokenizer = _TOKENIZER
+    model = _MODEL
+    device = _DEVICE
+
+    inputs = tokenizer(prompt, return_tensors="pt").to(device)
+
     with torch.no_grad():
         outputs = model.generate(
             **inputs,
@@ -80,15 +148,13 @@ def _generate_llm_answer(prompt: str, max_new_tokens: int = 128) -> str:
 
     full_text = tokenizer.decode(outputs[0], skip_special_tokens=True).strip()
 
-    # If an assistant tag is present, prioritize extracting only the portion
-    # following the assistant tag.
+    # If an assistant tag is present, prioritize the portion after it.
     for key in ["", "Assistant:", "assistant:"]:
         if key and key in full_text:
             full_text = full_text.split(key, 1)[-1].strip()
             break
 
-    # Split by sentences (simply by . ? !)
-    # Preserve delimiters for easy reassembly into complete sentences.
+    # Split into sentences using ., ?, ! while preserving delimiters.
     parts = re.split(r"([\.?!])", full_text)
     sentences: List[str] = []
     for i in range(0, len(parts) - 1, 2):
@@ -99,11 +165,10 @@ def _generate_llm_answer(prompt: str, max_new_tokens: int = 128) -> str:
     if not sentences:
         return "The manual does not provide this information."
 
-    # First, locate sentences that “contain numbers” (likely specifications or answers).
+    # Prefer sentences that contain numbers (often specifications / direct facts).
     candidate_sentences = [s for s in sentences if re.search(r"\d", s)]
-
     if not candidate_sentences:
-        # Fallback: find the last sentence without obvious prompt keywords
+        # Fallback: take the last sentence that does not look like prompt boilerplate.
         for s in reversed(sentences):
             low = s.lower()
             if any(
@@ -117,11 +182,10 @@ def _generate_llm_answer(prompt: str, max_new_tokens: int = 128) -> str:
             ):
                 continue
             return s.strip()
-
-        # If all else fails, just go with the last line.
+        # If everything looks like boilerplate, just return the last sentence.
         return sentences[-1].strip()
 
-    # Then, from these candidate sentences, try to eliminate the “problem itself.”
+    # From candidate sentences, try to eliminate the question itself.
     filtered: List[str] = []
     for s in candidate_sentences:
         low = s.lower()
@@ -139,6 +203,11 @@ def _generate_llm_answer(prompt: str, max_new_tokens: int = 128) -> str:
     return answer if answer else "The manual does not provide this information."
 
 
+# ---------------------------------------------------------------------------
+# Public RAG API
+# ---------------------------------------------------------------------------
+
+
 def rag_answer(
     question: str,
     vs_dict: Dict[str, object],
@@ -146,9 +215,10 @@ def rag_answer(
 ) -> str:
     """
     Perform retrieval-augmented generation:
-    - Retrieve similar fragments from the selected vector library based on routes
-    - Concatenate context
-    - Invoke the local LLM to generate the answer
+
+    - Retrieve similar fragments from the selected vector libraries
+    - Concatenate the context
+    - Invoke the local LLM to generate the final answer
     """
     docs = []
     for route in routes:
@@ -158,7 +228,9 @@ def rag_answer(
     if not docs:
         return "The manual does not provide this information."
 
-    # Concatenate the context to avoid excessive length.
+    # Concatenate the context while avoiding duplicated fragments and
+    # overly long prompts. The current limit is a pragmatic choice based
+    # on the small size of the manuals and Phi-3 context length.
     context_parts: List[str] = []
     seen = set()
     for d in docs:
