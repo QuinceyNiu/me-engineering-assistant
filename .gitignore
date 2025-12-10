@@ -32,3 +32,5 @@ checkpoints/
 # ---- 保险起见，如果以后不小心把 HF 缓存放进项目，也不被提交 ----
 .cache/
 
+.env
+.env_token
