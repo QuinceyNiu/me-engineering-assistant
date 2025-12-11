@@ -62,7 +62,7 @@ MAX_NEW_TOKENS = int(os.getenv("LLM_MAX_NEW_TOKENS", "96"))
 # LLM_BACKEND controls whether we use a local model or an online model.
 # - "local": use the local Phi-3 model via transformers (default)
 # - "remote": use a remote open-source model via Hugging Face Inference API
-LLM_BACKEND = os.getenv("LLM_BACKEND", "local").lower()
+LLM_BACKEND = os.getenv("LLM_BACKEND", "remote").lower()
 
 # Default remote model for the online backend (must be a text-generation model
 # available on Hugging Face Hub). You can override this via environment
