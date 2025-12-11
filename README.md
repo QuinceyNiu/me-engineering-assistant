@@ -341,45 +341,79 @@ The agent is considered valid when **either backend** meets:
 
 ---
 
-## 🐳 11. Containerization (Experimental)
+## 🐳 11. Containerization (Docker)
 
-A Dockerfile is included as a template.
+A Dockerfile is included to serve the agent as an HTTP API.
 The container can serve the agent using either LLM backend:
 
 - Local: Phi-3-mini model loaded via transformers
 - Remote: Llama-3.x hosted on HuggingFace Inference API (free tier compatible)
 
-**Build image**
+### 11.1 Build image
+
+> Make sure you have already logged a model locally (see section **7. MLflow Model Logging**)
+> so that the `mlruns/` directory contains the latest artifacts.
 
 ```bash
 docker build -t me-assistant .
 ```
 
-**Local backend(default)**:
+The Dockerfile copies the following into the image:
 
-This mode runs completely offline and loads the Phi-3 model inside the container.
+- src/ → installed as a Python package
+- data/ → /app/data
+- mlruns/ → /app/mlruns
+
+### 11.2 Find the latest model artifact path
+
+After you run:
+```bash
+export MLFLOW_TRACKING_URI="file:$(pwd)/mlruns"
+python -m me_engineering_assistant.log_model
+```
+
+MLflow will create a new model version under mlruns/. The on-disk artifact path usually looks like:
+```text
+mlruns/<experiment_id>/models/<model_id>/artifacts/
+```
+
+Inside the Docker image, this becomes:
+```text
+/app/mlruns/<experiment_id>/models/<model_id>/artifacts
+```
+
+You can find the exact path by inspecting the mlruns/ directory or using the
+MLflow UI. Use that path as MODEL_URI inside the container.
+
+### 11.3 Run container (remote backend – recommended for evaluation)
 
 ```bash
 docker run -p 8000:8000 \
-    -e MLFLOW_TRACKING_URI=file:/app/mlruns \
-    -e MODEL_URI=models:/me-engineering-assistant@prod \
-    -e LLM_BACKEND=local \
-    me-assistant
+  -e MODEL_URI=/app/mlruns/<experiment_id>/models/<model_id>/artifacts \
+  -e LLM_BACKEND=remote \
+  -e REMOTE_LLM_MODEL_NAME="meta-llama/Llama-3.2-1B-Instruct" \
+  -e HUGGINGFACEHUB_API_TOKEN="hf_xxx" \
+  me-assistant
 ```
 
-**Remote backend(online open-source LLM)**:
+- MODEL_URI uses the filesystem path to the logged MLflow model artifacts.
+- No external MLflow server is required – everything is loaded from /app/mlruns.
+- The API will be available at: http://localhost:8000/predict.
 
-This mode uses HuggingFace Inference API and requires an API token.
+### 11.4 Run container (local backend – offline Phi-3)
 
+>Note: this mode loads the Phi-3-mini model inside the container and requires more CPU/GPU
+>resources. It is mainly intended to demonstrate that the system can run fully offline.
 ```bash
 docker run -p 8000:8000 \
-    -e MLFLOW_TRACKING_URI=file:/app/mlruns \
-    -e MODEL_URI=models:/me-engineering-assistant@prod \
-    -e LLM_BACKEND=remote \
-    -e REMOTE_LLM_MODEL_NAME="meta-llama/Llama-3.2-1B-Instruct" \
-    -e HUGGINGFACEHUB_API_TOKEN=hf_xxx \
-    me-assistant
+  -e MODEL_URI=/app/mlruns/<experiment_id>/models/<model_id>/artifacts \
+  -e LLM_BACKEND=local \
+  -e LLM_MODEL_NAME="microsoft/Phi-3-mini-4k-instruct" \
+  me-assistant
 ```
+
+In both modes, the ```config.py``` data path resolution will automatically pick ```/app/data```
+as the source of ECU manuals.
 
 ---
 
@@ -401,7 +435,6 @@ docker run -p 8000:8000 \
 
 - Router is rule-based (no embedding classifier yet
 - Vectorstore is rebuilt at runtime (non-persistent)
-- Docker image still experimental
 - No streaming inference
 - Remote backend adds external dependency (network + HF API availability)
 
@@ -440,20 +473,20 @@ docker run -p 8000:8000 \
 
 ## 🏁 14. Challenge Requirements Alignment
 
-| Requirement                 | Status                                           |         |
-|-----------------------------|--------------------------------------------------|---------|
-| Multi-source RAG            | ✔ Implemented                                    |         |
-| Intelligent routing         | ✔ Router node                                    |         |
-| LangGraph agent             | ✔ Two-node workflow (router → RAG)               |         |
-| MLflow model logging        | ✔ Custom pyfunc, versioned, prod alias           |         |
-| REST API                    | ✔ FastAPI `/predict` loading MLflow model        |         |
-| Dockerization               | ⚪ Template included (supports both LLM backends) |         |
-| Local LLM inference         | ✔ Phi-3-mini (offline)                           |         |
-| Online LLM inference        | ✔ Llama-3.x via HuggingFace API (free)           |         |
-| Backend configurability     | ✔ `LLM_BACKEND=local                             | remote` |
-| Architectural documentation | ✔ Included                                       |         |
-| Testing strategy            | ✔ Local + Remote benchmarks & pytest             |         |
-| Limitations & future work   | ✔ Documented                                     |         |
+| Requirement                 | Status                                    |         |
+|-----------------------------|-------------------------------------------|---------|
+| Multi-source RAG            | ✔ Implemented                             |         |
+| Intelligent routing         | ✔ Router node                             |         |
+| LangGraph agent             | ✔ Two-node workflow (router → RAG)        |         |
+| MLflow model logging        | ✔ Custom pyfunc, versioned, prod alias    |         |
+| REST API                    | ✔ FastAPI `/predict` loading MLflow model |         |
+| Dockerization               | ✔ Validated for remote backend            |         |
+| Local LLM inference         | ✔ Phi-3-mini (offline)                    |         |
+| Online LLM inference        | ✔ Llama-3.x via HuggingFace API (free)    |         |
+| Backend configurability     | ✔ `LLM_BACKEND=local                      | remote` |
+| Architectural documentation | ✔ Included                                |         |
+| Testing strategy            | ✔ Local + Remote benchmarks & pytest      |         |
+| Limitations & future work   | ✔ Documented                              |         |
 
 
 ---
