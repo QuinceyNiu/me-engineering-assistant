@@ -7,18 +7,48 @@ Most values can be overridden via environment variables so that
 the behavior can be tuned without changing code.
 """
 
-import os
 from pathlib import Path
+import os
 
-# ---------------------------------------------------------------------------
-# Paths
-# ---------------------------------------------------------------------------
+def _get_data_dir() -> Path:
+    """
+    Detect the directory that contains the ECU manuals.
 
-# Root directory of the repository (two levels above this file)
-BASE_DIR = Path(__file__).resolve().parents[2]
+    Priority:
+    1. Environment variable ME_ASSISTANT_DATA_DIR
+    2. Local source tree: <project_root>/data
+    3. Docker image default: /app/data
+    4. Package-relative: <this_package>/data
+    """
+    # 1. Env override (for maximum flexibility)
+    env_dir = os.getenv("ME_ASSISTANT_DATA_DIR")
+    if env_dir:
+        p = Path(env_dir)
+        if p.exists():
+            return p
 
-# Data directory and files
-DATA_DIR = BASE_DIR / "data"
+    here = Path(__file__).resolve()
+
+    # 2. Running from source tree (src/me_engineering_assistant/...)
+    project_root = here.parents[2]
+    src_data = project_root / "data"
+    if src_data.exists():
+        return src_data
+
+    # 3. Docker image: we COPY data/ into /app/data
+    docker_data = Path("/app/data")
+    if docker_data.exists():
+        return docker_data
+
+    # 4. Package-relative fallback (if you ever package data with the wheel)
+    pkg_data = here.parent / "data"
+    if pkg_data.exists():
+        return pkg_data
+
+    # 5. Last resort: still return src_data (will likely fail, but path is explicit)
+    return src_data
+
+DATA_DIR = _get_data_dir()
 
 ECU_700_PATH = DATA_DIR / "ECU-700_Series_Manual.md"
 ECU_800_BASE_PATH = DATA_DIR / "ECU-800_Series_Base.md"
