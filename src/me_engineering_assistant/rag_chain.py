@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+import os
 from typing import Dict, List, Optional
 import re
 
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
+from huggingface_hub import InferenceClient
 
-from .config import TOP_K, LLM_MODEL_NAME, MAX_NEW_TOKENS
+
+from .config import TOP_K, LLM_MODEL_NAME, MAX_NEW_TOKENS, LLM_BACKEND, HF_TOKEN_ENV_VAR, REMOTE_LLM_MODEL_NAME
 
 # ---------------------------------------------------------------------------
 # Lazy-loaded local LLM
@@ -81,6 +84,16 @@ def _ensure_model_loaded() -> None:
     _MODEL = model
 
 
+def _ensure_local_model_loaded() -> None:
+    """
+    Backward-compatible alias.
+
+    Some parts of the code call `_ensure_local_model_loaded()`. The actual
+    implementation lives in `_ensure_model_loaded()`.
+    """
+    _ensure_model_loaded()
+
+
 def _ensure_remote_client_loaded() -> None:
     """
     Lazily create a Hugging Face InferenceClient for the remote backend.
@@ -123,19 +136,13 @@ def _build_prompt(question: str, context: str) -> str:
     """
     Build a prompt for the selected backend.
 
-    For the LOCAL backend:
-        - Use the tokenizer's chat template (when available).
-        - This mirrors the original, more reliable Phi-3 usage pattern.
-
-    For the REMOTE backend:
-        - Use a plain-text instruction that can be sent directly to
-          text-generation endpoints.
+    - LOCAL:
+        Use tokenizer chat template (when available) for best behavior.
+        This requires the local tokenizer/model to be loaded.
+    - REMOTE:
+        Do NOT load local models. Build a plain-text prompt suitable for
+        Hugging Face text-generation endpoints.
     """
-    _ensure_model_loaded()
-    assert _TOKENIZER is not None  # for type checkers
-
-    tokenizer = _TOKENIZER
-
     system_msg = (
         'You are the "ME Engineering Assistant", an ECU technical expert. '
         "Answer strictly based on the provided ECU manual context. "
@@ -148,33 +155,30 @@ def _build_prompt(question: str, context: str) -> str:
         "Answer in concise, professional English for an engineer."
     )
 
-    # Local backend: use chat template when available for best behavior.
-    if LLM_BACKEND == "local":
-        _ensure_local_model_loaded()
-        assert _TOKENIZER is not None
-        tokenizer = _TOKENIZER
+    # Remote backend: never touch local model/tokenizer.
+    if LLM_BACKEND == "remote":
+        return system_msg + "\n\n" + user_msg + "\n\nAnswer:"
 
-        messages = [
-            {"role": "system", "content": system_msg},
-            {"role": "user", "content": user_msg},
-        ]
+    # Local backend: load model/tokenizer lazily and prefer chat template.
+    _ensure_model_loaded()
+    assert _TOKENIZER is not None  # for type checkers
+    tokenizer = _TOKENIZER
 
-        try:
-            # Many instruct models (including Phi-3) define a chat template.
-            # This usually yields much more stable, well-structured outputs.
-            return tokenizer.apply_chat_template(
-                messages,
-                tokenize=False,
-                add_generation_prompt=True,
-            )
-        except Exception:
-            # If the tokenizer does not support chat templates,
-            # fall back to the plain-text prompt below.
-            pass
+    messages = [
+        {"role": "system", "content": system_msg},
+        {"role": "user", "content": user_msg},
+    ]
 
-    # Remote backend (or local fallback): plain-text prompt.
-    prompt = system_msg + "\n\n" + user_msg + "\n\nAnswer:"
-    return prompt
+    try:
+        return tokenizer.apply_chat_template(
+            messages,
+            tokenize=False,
+            add_generation_prompt=True,
+        )
+    except Exception:
+        # If chat template is not available, fall back to plain prompt.
+        return system_msg + "\n\n" + user_msg + "\n\nAnswer:"
+
 
 
 # ---------------------------------------------------------------------------
