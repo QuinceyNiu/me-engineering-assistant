@@ -1,7 +1,9 @@
 from pathlib import Path
+import shutil
 
 import mlflow
 import mlflow.pyfunc
+from mlflow.artifacts import download_artifacts
 from mlflow.tracking import MlflowClient
 import pandas as pd
 
@@ -11,75 +13,114 @@ from .mlflow_model import MEEngineeringAssistantModel
 REGISTERED_MODEL_NAME = "me-engineering-assistant"
 EXPERIMENT_NAME = "me-engineering-assistant"
 
+# Subdirectory name used when logging the pyfunc model as an artifact
+ARTIFACT_SUBPATH = "me_engineering_assistant_model"
+
+
+def _export_latest_model_to_saved_dir(run_id: str) -> Path:
+    """
+    Export the latest logged pyfunc model artifacts into a fixed directory
+    called `saved_model/` under the current working directory.
+
+    This makes the model easy to consume both in local development and inside
+    Docker, without needing to know the internal MLflow `mlruns/` layout.
+    """
+    # Use MLflow's `runs:/` URI to locate the pyfunc model artifacts
+    model_uri = f"runs:/{run_id}/{ARTIFACT_SUBPATH}"
+
+    # Download the artifacts to a local directory (MLflow chooses the temp path)
+    local_artifacts_path = Path(download_artifacts(model_uri))
+
+    # Assume the command is invoked from the project root
+    project_root = Path.cwd()
+    saved_model_dir = project_root / "saved_model"
+
+    # Replace any previous exported model
+    if saved_model_dir.exists():
+        shutil.rmtree(saved_model_dir)
+
+    shutil.copytree(local_artifacts_path, saved_model_dir)
+
+    print(
+        f"\n[log_model] Exported latest model artifacts to: {saved_model_dir}\n"
+        "You can now load the model via:\n"
+        "  - MODEL_URI=./saved_model        (local development)\n"
+        "  - MODEL_URI=/app/saved_model     (inside Docker)\n"
+    )
+    return saved_model_dir
+
 
 def main() -> None:
     """
-    Log the current RAG agent as an MLflow pyfunc model, register it,
-    and update the "prod" alias to point to the latest version.
+    Log the current RAG agent as an MLflow pyfunc model, register it, update the
+    `prod` alias to the latest version, and export the artifacts to `saved_model/`.
 
-    Operation method:
+    Usage:
+
         python -m me_engineering_assistant.log_model
 
-    Afterwards, you can use:
-        MODEL_URI = “models:/me-engineering-assistant@prod”
-    to load the latest production model without manually copying the run_id.
-    """
+    After running this once, you can start the API with:
 
-    # Construct a small input_example to facilitate subsequent inference and automatic signature deduction.
+        - Local dev: MODEL_URI=./saved_model
+        - Docker:    MODEL_URI=/app/saved_model  (the Dockerfile copies it there)
+    """
+    # Small input_example to help MLflow infer the model signature
     input_example = pd.DataFrame(
         {"question": ["What is the maximum operating temperature for the ECU-850b?"]}
     )
 
-    # Instantiate the current RAG Agent / Model Encapsulation
+    # Wrap the current RAG Agent / Model implementation
     model = MEEngineeringAssistantModel()
 
-    # Reserve a directory for the local file backend (even if you're using a DB backend, it won't cause any issues).
+    # Reserve a directory for the local file backend (safe even if you later
+    # switch to a DB backend).
     tracking_dir = Path("mlruns")
     tracking_dir.mkdir(exist_ok=True)
 
-    # ⚠️ Do not force the tracking_uri; respect the MLFLOW_TRACKING_URI environment variable.
-    # If you really want to force the use of local file storage, uncomment the following two lines:
+    # DO NOT override MLFLOW_TRACKING_URI here; respect the environment variable.
+    # If you really want to force file storage, you could uncomment:
     # mlflow.set_tracking_uri(tracking_dir.resolve().as_uri())
 
-    # Use a dedicated experiment name to avoid mixing with other experiments.
+    # Use a dedicated experiment to avoid mixing with other runs
     mlflow.set_experiment(EXPERIMENT_NAME)
 
-    # Start a new run and log + register the model within it.
+    # Log and register the model within a single run
     with mlflow.start_run(run_name="me-engineering-assistant") as run:
-        # Wrap the current Agent as a pyfunc model and:
-        # 1) Record it in the artifacts of the current run
-        # 2) Register it in the Model Registry with the name REGISTERED_MODEL_NAME
+        # 1) Log the model artifacts under ARTIFACT_SUBPATH
+        # 2) Register it in the Model Registry with the given name
         _ = mlflow.pyfunc.log_model(
-            artifact_path="me_engineering_assistant_model",  # 此参数虽有弃用 warning，但仍完全可用
+            artifact_path=ARTIFACT_SUBPATH,
+            # This parameter is deprecated but still fully functional in MLflow 2.x
             python_model=model,
             input_example=input_example,
             registered_model_name=REGISTERED_MODEL_NAME,
         )
 
         run_id = run.info.run_id
-        print(f"Logged MLflow model to experiment '{EXPERIMENT_NAME}', run_id = {run_id}")
         print(
-            "Run-specific MODEL_URI (Only for test):\n"
-            f"  runs:/{run_id}/me_engineering_assistant_model"
+            f"Logged MLflow model to experiment '{EXPERIMENT_NAME}', "
+            f"run_id = {run_id}"
+        )
+        print(
+            "Run-specific MODEL_URI (for testing only):\n"
+            f"  runs:/{run_id}/{ARTIFACT_SUBPATH}\n"
         )
 
-    # Use the alias feature of the Model Registry to automatically point “prod” to the latest version.
+    # Update the Model Registry alias "prod" to point to the latest version
     client = MlflowClient()
 
-    # Use `search_model_versions` (recommended API) instead of the outdated `get_latest_versions`
-    # Filter condition: Retrieve all versions under this Registered Model name
+    # Use `search_model_versions` (recommended API) instead of the outdated
+    # `get_latest_versions`.
     versions = client.search_model_versions(f"name = '{REGISTERED_MODEL_NAME}'")
-
     if not versions:
         raise RuntimeError(
             f"No versions found for registered model '{REGISTERED_MODEL_NAME}'. "
             "Please make sure log_model ran successfully."
         )
 
-    # Take the version with the highest number as the “latest version”
+    # Take the version with the highest number as the "latest" one
     latest_version = max(versions, key=lambda v: int(v.version))
 
-    # Set the alias “prod” to point to this latest version
     client.set_registered_model_alias(
         name=REGISTERED_MODEL_NAME,
         alias="prod",
@@ -90,13 +131,17 @@ def main() -> None:
         "\nRegistered model updated:"
         f"\n  name    = {REGISTERED_MODEL_NAME}"
         f"\n  version = {latest_version.version}"
-        f"\n  alias   = prod"
+        "\n  alias   = prod\n"
     )
     print(
-        "\nRecommended MODEL_URI:\n"
+        "Recommended MODEL_URI when using the Model Registry alias:\n"
         f"  models:/{REGISTERED_MODEL_NAME}@prod\n"
     )
-    print("Model logging & alias update finished successfully.\n")
+
+    # Export artifacts to a fixed `saved_model/` directory for easier consumption
+    _export_latest_model_to_saved_dir(run_id)
+
+    print("Model logging, alias update, and export finished successfully.\n")
 
 
 if __name__ == "__main__":

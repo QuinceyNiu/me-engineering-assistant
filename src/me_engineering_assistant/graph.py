@@ -6,7 +6,7 @@ from typing import Dict, List, TypedDict
 from langgraph.graph import END, StateGraph
 
 from .router import route_question
-from .rag_chain import rag_answer
+from .rag_chain import rag_answer, FALLBACK_ANSWER
 from .vectorstore import build_vectorstores
 
 
@@ -51,7 +51,21 @@ def router_node(state: AgentState) -> AgentState:
 def rag_node(state: AgentState) -> AgentState:
     """LangGraph node: perform RAG based on routing to generate responses."""
     vs_dict = get_vectorstores()
-    routes = state.get("routes") or list(vs_dict.keys())
+
+    routes = state.get("routes", None)
+
+    # IMPORTANT:
+    # - None  => no routing decision; we may fall back to all docs
+    # - []    => explicitly no match (e.g., unknown ECU model); return fallback
+    if routes is None:
+        routes = list(vs_dict.keys())
+
+    if isinstance(routes, list) and len(routes) == 0:
+        state["answer"] = FALLBACK_ANSWER
+        state.setdefault("metadata", {})
+        state["metadata"]["rag_reason"] = "No matching manuals for the requested ECU model."
+        return state
+
     answer = rag_answer(state["question"], vs_dict, routes)
     state["answer"] = answer
     return state

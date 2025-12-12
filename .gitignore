@@ -1,36 +1,36 @@
-# ---- Python 编译文件 ----
+# ---- Python Compiled Files ----
 __pycache__/
 *.py[cod]
 *.pyo
 *.pyd
 *.so
 
-# ---- 虚拟环境 ----
+# ---- Virtual Environments ----
 .venv/
 venv/
 env/
 
-# ---- 操作系统杂项 ----
+# ---- Operating System Miscellaneous ----
 .DS_Store
 
-# ---- IDE 配置 ----
+# ---- IDE Configuration ----
 .vscode/
 .idea/
 
-# ---- MLflow 本地运行记录（可以随时重新生成）----
+# ---- MLflow Local Run History (Can Be Regenerated Anytime) ----
 mlruns/
 
-# ---- 本地保存的 MLflow 模型（也可以随时重新 save_model）----
+# ---- Locally Saved MLflow Models (Can Also Be Resaved Anytime) ----
 saved_model/
 
-# ---- 本地 / 临时模型文件 ----
+# ---- Local / Temporary Model Files ----
 checkpoints/
 *.pt
 *.bin
 *.safetensors
 
-# ---- 保险起见，如果以后不小心把 HF 缓存放进项目，也不被提交 ----
+# ---- For safety, if HF cache is accidentally placed in project, it won't be committed ----
 .cache/
 
+# Secrets
 .env
-.env_token

@@ -8,7 +8,7 @@ This project demonstrates:
 - Query routing across multiple ECU models
 - FastAPI RESTful service
 - MLflow model packaging & serving
-- **Dockerfile template (experimental, not fully validated yet)**
+- Dockerized API serving (validated; supports .env configuration)
 
 The system runs fully **offline**, making it suitable for on-premise or restricted environments.
 
@@ -53,9 +53,9 @@ Exports the entire pipeline as a custom pyfunc model with versioning + prod alia
 ### ✔ REST API with FastAPI  
 Provides a standard /predict endpoint.
 
-### ⚪ Docker (Experimental)  
-A Dockerfile is provided as a **work-in-progress template**.  
-It is not yet fully validated end-to-end and may require additional configuration.
+### ✔ Docker (Validated)
+Runs as a self-contained HTTP API with a single command using `--env-file .env`.
+No need to manually locate MLflow artifact paths.
 
 ---
 
@@ -66,8 +66,10 @@ me-engineering-assistant/
 │
 ├── README.md                      # Project documentation
 ├── pyproject.toml                 # Dependencies & build config
-├── dockerfile                     # Docker build instructions (experimental)
+├── dockerfile                     # Docker build instructions (validated; .env-friendly)
 ├── project_tree.txt               # Auto-generated project structure
+├── .env.example                   # Environment template (no secrets)
+├── .gitignore                     # Ignore local artifacts & secrets
 │
 ├── data/                          # ECU manuals + test questions
 │   ├── ECU-700_Series_Manual.md
@@ -75,18 +77,21 @@ me-engineering-assistant/
 │   ├── ECU-800_Series_Plus.md
 │   └── test-questions.csv
 │
-├── mlruns/                        # Local MLflow tracking directory
-│   └── ... (multiple registered runs/models)
+├── saved_model/                   # Exported MLflow pyfunc artifacts (generated, gitignored)
+│   └── ... (latest model artifacts; used by Docker as /app/saved_model)
+│
+├── mlruns/                        # Local MLflow tracking directory (generated, gitignored)
+│   └── ... (local runs / registry metadata; optional for end users)
 │
 ├── src/
 │   └── me_engineering_assistant/
 │       ├── __init__.py
-│       ├── __main__.py            # FastAPI entrypoint
+│       ├── __main__.py            # FastAPI entrypoint (auto-detects MODEL_URI)
 │       ├── api.py                 # REST handlers
-│       ├── config.py
+│       ├── config.py              # Robust data path resolution (local + Docker)
 │       ├── data_loader.py
 │       ├── graph.py               # LangGraph orchestration (router → RAG)
-│       ├── log_model.py           # MLflow model logging utility
+│       ├── log_model.py           # MLflow logging + export to ./saved_model
 │       ├── mlflow_model.py        # MLflow pyfunc interface
 │       ├── rag_chain.py           # Retrieval + LLM generation
 │       ├── router.py              # Document routing logic
@@ -94,6 +99,7 @@ me-engineering-assistant/
 │       └── vectorstore.py         # Embeddings + vectorstore builder
 │
 └── tests/
+    ├── benchmark.py               # Benchmark verification
     └── test_agent_e2e.py          # End-to-end verification
 ```
 
@@ -137,16 +143,60 @@ pip install -e .
 
 ## 🚀 6. Running Locally (CLI)
 
+### 6.1 Local Phi-3 (default)
 ```bash
-python -m me_engineering_assistant.sandbox_test
+export LLM_BACKEND=local
+export LLM_MODEL_NAME="microsoft/Phi-3-mini-4k-instruct"
 ```
+### 6.2 Remote open-source LLM (HuggingFace Inference API)
+
+Create `.env` from the template:
+
+    cp .env.example .env
+
+Edit `.env` and set:
+
+    LLM_BACKEND=remote
+    REMOTE_LLM_MODEL_NAME=meta-llama/Llama-3.2-1B-Instruct
+    HUGGINGFACEHUB_API_TOKEN=hf_xxx
+
+The project autoloads `.env` via `python-dotenv`.
+
+All entrypoints (CLI, FastAPI, MLflow logging) obey these settings.
+
+---
+
+## 🚀 7. MLflow Model Logging
+Before serving the API, you must register the MLflow model.
+
+### 7.1 Set tracking URI
+```bash
+export MLFLOW_TRACKING_URI="file:$(pwd)/mlruns"
+```
+### 7.2 Log the model
+```bash
+python -m me_engineering_assistant.log_model
+```
+This will:
+- Run the complete pipeline (routing → RAG → LLM)
+- Log a new MLflow model version
+- Update the prod alias
+
 Example output:
 ```vbnet
 Question: What is the maximum operating temperature for the ECU-850b?
 Answer: The maximum operating temperature for the ECU-850b is +105°C.
 ```
 
----
+Additionally, the script exports the latest model artifacts to:
+
+    ./saved_model/
+
+This fixed path is used by Docker to avoid manual MLflow artifact path lookup.
+
+Optional (Model Registry alias, local usage only):
+
+    models:/me-engineering-assistant@prod
 
 ## 🌐 7. Start the FastAPI Server
 
@@ -303,32 +353,69 @@ The agent is considered valid when:
 
 ---
 
-## 🐳 11. Containerization (Experimental)
+## 🐳 11. Containerization (Docker)
 
-A Dockerfile is included as a template, but not yet fully validated.
+A Dockerfile is included to serve the agent as an HTTP API.
+The container can serve the agent using either LLM backend:
+
+- Local: Phi-3-mini model loaded via transformers
+- Remote: Llama-3.x hosted on HuggingFace Inference API (free tier compatible)
+
+### 11.1 Build image
+
+> Make sure you have already logged a model locally (see section **7. MLflow Model Logging**)
+> so that the `mlruns/` directory contains the latest artifacts.
 
 Example usage:
 ```bash
 docker build -t me-assistant .
-docker run -p 8000:8000 \
-    -e MODEL_URI=models:/me-engineering-assistant@prod \
-    me-assistant
 ```
 
-Areas requiring further work:
-- Preloading Phi-3 model
-- MLflow filesystem mounting
-- Performance tuning inside container
+The Dockerfile copies the following into the image:
+
+- src/ → installed as a Python package
+- data/ → /app/data
+- saved_model/ → /app/saved_model
+
+### 11.2 Prepare environment variables
+
+Copy the template and fill in your HuggingFace token:
+
+    cp .env.example .env
+
+### 11.3 Run container (one-liner)
+
+    docker run --env-file .env -p 8000:8000 me-assistant
+
+Notes:
+
+- `MODEL_URI` is auto-detected inside Docker (`/app/saved_model`).
+- ECU manuals are loaded from `/app/data`.
+- API endpoint: http://localhost:8000/predict
+
 
 ---
 
 ## ⚠️ 12. Limitations
 
-- Phi-3 may hallucinate on ambiguous questions
-- Router is rule-based (no embedding classifier yet)
-- Vectorstore rebuilt at runtime (non-persistent)
-- Docker build still experimental
-- No streaming answer support
+### LLM-related
+
+- Local backend (Phi-3)
+
+    - Highest correctness but slower inference
+    - May hallucinate under ambiguous context
+
+- Remote backend (Llama-3.x)
+
+    - Lower latency but dependent on HuggingFace API rate limits
+    - Occasional fallback responses when API returns minimal content
+
+### System limitations
+
+- Router is rule-based (no embedding classifier yet
+- Vectorstore is rebuilt at runtime (non-persistent)
+- No streaming inference
+- Remote backend adds external dependency (network + HF API availability)
 
 ---
 
@@ -336,10 +423,9 @@ Areas requiring further work:
 
 ### MLOps Enhancements
 
-- Fully hardened Docker deployment
-- MLflow model serving (```mlflow models serve```)
-- Upgrade to SQLite/Postgres backend
-
+- MLflow-native model serving (mlflow models serve)
+- Cloud-ready tracking server (SQLite / Postgres)
+- GPU-enabled images for faster local inference
 
 ### Agent Improvements
 
@@ -357,17 +443,21 @@ Areas requiring further work:
 
 ## 🏁 14. Challenge Requirements Alignment
 
-| Requirement                 | Status                                 |
-| --------------------------- | -------------------------------------- |
-| Multi-source RAG            | ✔ Implemented                          |
-| Intelligent routing         | ✔ Router node                          |
-| LangGraph agent             | ✔ Two-node workflow                    |
-| MLflow model logging        | ✔ Custom pyfunc, versioned, prod alias |
-| REST API                    | ✔ FastAPI `/predict`                   |
-| Dockerization               | ⚪ Template included (experimental)     |
-| Architectural documentation | ✔ Included                             |
-| Testing strategy            | ✔ Automated + proposed framework       |
-| Limitations & future work   | ✔ Documented                           |
+| Requirement                 | Status                                    |         |
+|-----------------------------|-------------------------------------------|---------|
+| Multi-source RAG            | ✔ Implemented                             |         |
+| Intelligent routing         | ✔ Router node                             |         |
+| LangGraph agent             | ✔ Two-node workflow (router → RAG)        |         |
+| MLflow model logging        | ✔ Custom pyfunc, versioned, prod alias    |         |
+| REST API                    | ✔ FastAPI `/predict` loading MLflow model |         |
+| Dockerization               | ✔ Validated for remote backend            |         |
+| Local LLM inference         | ✔ Phi-3-mini (offline)                    |         |
+| Online LLM inference        | ✔ Llama-3.x via HuggingFace API (free)    |         |
+| Backend configurability     | ✔ `LLM_BACKEND=local                      | remote` |
+| Architectural documentation | ✔ Included                                |         |
+| Testing strategy            | ✔ Local + Remote benchmarks & pytest      |         |
+| Limitations & future work   | ✔ Documented                              |         |
+
 
 ---
 

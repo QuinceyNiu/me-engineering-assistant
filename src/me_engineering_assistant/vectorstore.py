@@ -15,8 +15,12 @@ from .config import (
 from .data_loader import load_markdown, make_chunks
 
 
-def _build_collection(docs: List[dict], embeddings) -> Chroma:
-    """Build a Chroma vector library using a document list."""
+def _build_collection(
+    docs: List[dict],
+    embeddings,
+    collection_name: str,
+) -> Chroma:
+    """Build a dedicated Chroma vector library for one ECU family."""
     return Chroma.from_documents(
         [
             Document(
@@ -26,7 +30,9 @@ def _build_collection(docs: List[dict], embeddings) -> Chroma:
             for d in docs
         ],
         embedding=embeddings,
+        collection_name=collection_name,
     )
+
 
 
 def build_vectorstores() -> Dict[str, Chroma]:
@@ -51,9 +57,9 @@ def build_vectorstores() -> Dict[str, Chroma]:
         ecu800_plus_text, "ECU-800-plus", CHUNK_SIZE, CHUNK_OVERLAP
     )
 
-    vs700 = _build_collection(ecu700_chunks, embeddings)
-    vs800_base = _build_collection(ecu800_base_chunks, embeddings)
-    vs800_plus = _build_collection(ecu800_plus_chunks, embeddings)
+    vs700 = _build_collection(ecu700_chunks, embeddings, "ECU-700")
+    vs800_base = _build_collection(ecu800_base_chunks, embeddings, "ECU-800-base")
+    vs800_plus = _build_collection(ecu800_plus_chunks, embeddings, "ECU-800-plus")
 
     return {
         "ECU-700": vs700,
