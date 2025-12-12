@@ -9,7 +9,7 @@ This project demonstrates:
 - Query routing across multiple ECU models
 - FastAPI RESTful service
 - MLflow model packaging & serving
-- **Dockerfile template (experimental, not fully validated yet)**
+- Dockerized API serving (validated; supports .env configuration)
 
 The system can run fully offline (local LLM) or partially online (remote LLM) based on user configuration.
 
@@ -64,9 +64,9 @@ Exports the entire pipeline as a custom pyfunc model with versioning + ```prod``
 ### ✔ REST API with FastAPI  
 Provides standard ```/predict``` endpoint served from MLflow model.
 
-### ⚪ Docker (Experimental)  
-A Dockerfile is provided as a **work-in-progress template**.  
-It is not yet fully validated end-to-end and may require additional configuration.
+### ✔ Docker (Validated)
+Runs as a self-contained HTTP API with a single command using `--env-file .env`.
+No need to manually locate MLflow artifact paths.
 
 ---
 
@@ -77,8 +77,10 @@ me-engineering-assistant/
 │
 ├── README.md                      # Project documentation
 ├── pyproject.toml                 # Dependencies & build config
-├── dockerfile                     # Docker build instructions (experimental)
+├── dockerfile                     # Docker build instructions (validated; .env-friendly)
 ├── project_tree.txt               # Auto-generated project structure
+├── .env.example                   # Environment template (no secrets)
+├── .gitignore                     # Ignore local artifacts & secrets
 │
 ├── data/                          # ECU manuals + test questions
 │   ├── ECU-700_Series_Manual.md
@@ -86,25 +88,28 @@ me-engineering-assistant/
 │   ├── ECU-800_Series_Plus.md
 │   └── test-questions.csv
 │
-├── mlruns/                        # Local MLflow tracking directory
-│   └── ... (multiple registered runs/models)
+├── saved_model/                   # Exported MLflow pyfunc artifacts (generated, gitignored)
+│   └── ... (latest model artifacts; used by Docker as /app/saved_model)
+│
+├── mlruns/                        # Local MLflow tracking directory (generated, gitignored)
+│   └── ... (local runs / registry metadata; optional for end users)
 │
 ├── src/
 │   └── me_engineering_assistant/
 │       ├── __init__.py
-│       ├── __main__.py            # FastAPI entrypoint
+│       ├── __main__.py            # FastAPI entrypoint (auto-detects MODEL_URI)
 │       ├── api.py                 # REST handlers
-│       ├── config.py
+│       ├── config.py              # Robust data path resolution (local + Docker)
 │       ├── data_loader.py
 │       ├── graph.py               # LangGraph orchestration (router → RAG)
-│       ├── log_model.py           # MLflow model logging utility
+│       ├── log_model.py           # MLflow logging + export to ./saved_model
 │       ├── mlflow_model.py        # MLflow pyfunc interface
 │       ├── rag_chain.py           # Retrieval + LLM generation
 │       ├── router.py              # Document routing logic
 │       ├── sandbox_test.py        # Simple local CLI test
 │       └── vectorstore.py         # Embeddings + vectorstore builder
 │
-└── tests
+└── tests/
     ├── benchmark.py               # Benchmark verification
     └── test_agent_e2e.py          # End-to-end verification
 ```
@@ -153,12 +158,20 @@ pip install -e .
 export LLM_BACKEND=local
 export LLM_MODEL_NAME="microsoft/Phi-3-mini-4k-instruct"
 ```
-### 6.2 Remote free open-source LLM (HuggingFace Inference API)
-```bash
-export LLM_BACKEND=remote
-export HUGGINGFACEHUB_API_TOKEN="hf_xxx"
-export REMOTE_LLM_MODEL_NAME="meta-llama/Llama-3.2-1B-Instruct"
-```
+### 6.2 Remote open-source LLM (HuggingFace Inference API)
+
+Create `.env` from the template:
+
+    cp .env.example .env
+
+Edit `.env` and set:
+
+    LLM_BACKEND=remote
+    REMOTE_LLM_MODEL_NAME=meta-llama/Llama-3.2-1B-Instruct
+    HUGGINGFACEHUB_API_TOKEN=hf_xxx
+
+The project autoloads `.env` via `python-dotenv`.
+
 All entrypoints (CLI, FastAPI, MLflow logging) obey these settings.
 
 ---
@@ -185,10 +198,15 @@ Created version '8' of model 'me-engineering-assistant'
 alias = prod
 ```
 
-Recommended model URI:
-```bash
-models:/me-engineering-assistant@prod
-```
+Additionally, the script exports the latest model artifacts to:
+
+    ./saved_model/
+
+This fixed path is used by Docker to avoid manual MLflow artifact path lookup.
+
+Optional (Model Registry alias, local usage only):
+
+    models:/me-engineering-assistant@prod
 
 ## 🌐 8. Start the FastAPI Server
 
@@ -362,58 +380,24 @@ The Dockerfile copies the following into the image:
 
 - src/ → installed as a Python package
 - data/ → /app/data
-- mlruns/ → /app/mlruns
+- saved_model/ → /app/saved_model
 
-### 11.2 Find the latest model artifact path
+### 11.2 Prepare environment variables
 
-After you run:
-```bash
-export MLFLOW_TRACKING_URI="file:$(pwd)/mlruns"
-python -m me_engineering_assistant.log_model
-```
+Copy the template and fill in your HuggingFace token:
 
-MLflow will create a new model version under mlruns/. The on-disk artifact path usually looks like:
-```text
-mlruns/<experiment_id>/models/<model_id>/artifacts/
-```
+    cp .env.example .env
 
-Inside the Docker image, this becomes:
-```text
-/app/mlruns/<experiment_id>/models/<model_id>/artifacts
-```
+### 11.3 Run container (one-liner)
 
-You can find the exact path by inspecting the mlruns/ directory or using the
-MLflow UI. Use that path as MODEL_URI inside the container.
+    docker run --env-file .env -p 8000:8000 me-assistant
 
-### 11.3 Run container (remote backend – recommended for evaluation)
+Notes:
 
-```bash
-docker run -p 8000:8000 \
-  -e MODEL_URI=/app/mlruns/<experiment_id>/models/<model_id>/artifacts \
-  -e LLM_BACKEND=remote \
-  -e REMOTE_LLM_MODEL_NAME="meta-llama/Llama-3.2-1B-Instruct" \
-  -e HUGGINGFACEHUB_API_TOKEN="hf_xxx" \
-  me-assistant
-```
+- `MODEL_URI` is auto-detected inside Docker (`/app/saved_model`).
+- ECU manuals are loaded from `/app/data`.
+- API endpoint: http://localhost:8000/predict
 
-- MODEL_URI uses the filesystem path to the logged MLflow model artifacts.
-- No external MLflow server is required – everything is loaded from /app/mlruns.
-- The API will be available at: http://localhost:8000/predict.
-
-### 11.4 Run container (local backend – offline Phi-3)
-
->Note: this mode loads the Phi-3-mini model inside the container and requires more CPU/GPU
->resources. It is mainly intended to demonstrate that the system can run fully offline.
-```bash
-docker run -p 8000:8000 \
-  -e MODEL_URI=/app/mlruns/<experiment_id>/models/<model_id>/artifacts \
-  -e LLM_BACKEND=local \
-  -e LLM_MODEL_NAME="microsoft/Phi-3-mini-4k-instruct" \
-  me-assistant
-```
-
-In both modes, the ```config.py``` data path resolution will automatically pick ```/app/data```
-as the source of ECU manuals.
 
 ---
 
@@ -444,7 +428,6 @@ as the source of ECU manuals.
 
 ### MLOps Enhancements
 
-- Fully validated Docker deployment
 - MLflow-native model serving (mlflow models serve)
 - Cloud-ready tracking server (SQLite / Postgres)
 - GPU-enabled images for faster local inference
