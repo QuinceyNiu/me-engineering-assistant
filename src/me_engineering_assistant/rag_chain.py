@@ -3,24 +3,15 @@
 from __future__ import annotations
 
 from typing import Dict, List, Optional
-import os
 import re
 
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
-from huggingface_hub import InferenceClient
 
-from .config import (
-    TOP_K,
-    LLM_MODEL_NAME,
-    MAX_NEW_TOKENS,
-    LLM_BACKEND,
-    REMOTE_LLM_MODEL_NAME,
-    HF_TOKEN_ENV_VAR,
-)
+from .config import TOP_K, LLM_MODEL_NAME, MAX_NEW_TOKENS
 
 # ---------------------------------------------------------------------------
-# Global state for local and remote backends
+# Lazy-loaded local LLM
 # ---------------------------------------------------------------------------
 
 _DEVICE: Optional[str] = None
@@ -41,9 +32,9 @@ def _select_device_and_dtype() -> tuple[str, torch.dtype]:
     """
     Select the best available device and an appropriate dtype.
 
-    - Prefer Apple Silicon (MPS) when available.
-    - Otherwise use CUDA if available.
-    - Fallback to CPU.
+    - Prefer Apple Silicon (MPS) when available
+    - Otherwise try CUDA
+    - Fallback to CPU
     """
     if torch.backends.mps.is_available():  # type: ignore[attr-defined]
         device = "mps"
@@ -52,14 +43,14 @@ def _select_device_and_dtype() -> tuple[str, torch.dtype]:
     else:
         device = "cpu"
 
-    # BF16 works well on MPS/CUDA; fall back to FP32 on CPU.
+    # BF16 works well on MPS/CUDA; fall back to FP32 on CPU
     dtype = torch.bfloat16 if device in {"mps", "cuda"} else torch.float32
     return device, dtype
 
 
-def _ensure_local_model_loaded() -> None:
+def _ensure_model_loaded() -> None:
     """
-    Lazily load the local Phi-3 (or any configured) model.
+    Lazily load the tokenizer and model on first use.
 
     This is only used when LLM_BACKEND == "local".
     The model is kept in process-wide globals so that repeated calls
@@ -140,6 +131,11 @@ def _build_prompt(question: str, context: str) -> str:
         - Use a plain-text instruction that can be sent directly to
           text-generation endpoints.
     """
+    _ensure_model_loaded()
+    assert _TOKENIZER is not None  # for type checkers
+
+    tokenizer = _TOKENIZER
+
     system_msg = (
         'You are the "ME Engineering Assistant", an ECU technical expert. '
         "Answer strictly based on the provided ECU manual context. "
@@ -268,7 +264,7 @@ def _generate_llm_answer(
     max_new_tokens: int = MAX_NEW_TOKENS,
 ) -> str:
     """
-    Invoke the selected LLM backend (local or remote) to generate the answer.
+    Invoke the local LLM to generate the answer.
 
     The function:
       1) Calls the appropriate backend to get the raw generated text.
@@ -388,7 +384,8 @@ def rag_answer(
         return FALLBACK_ANSWER
 
     # Concatenate the context while avoiding duplicated fragments and
-    # overly long prompts.
+    # overly long prompts. The current limit is a pragmatic choice based
+    # on the small size of the manuals and Phi-3 context length.
     context_parts: List[str] = []
     seen = set()
     for d in docs:
@@ -396,7 +393,6 @@ def rag_answer(
             seen.add(d.page_content)
             context_parts.append(d.page_content)
 
-    # For these small manuals, 6–8 chunks are usually enough.
     context = "\n\n---\n\n".join(context_parts[:8])
 
     prompt = _build_prompt(question, context)
