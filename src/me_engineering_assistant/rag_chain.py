@@ -327,10 +327,9 @@ def _generate_llm_answer(
                 do_sample=False,
             )
 
-        full_text = tokenizer.decode(
-            outputs[0],
-            skip_special_tokens=True,
-        ).strip()
+        input_len = inputs["input_ids"].shape[1]
+        gen_ids = outputs[0][input_len:]
+        full_text = tokenizer.decode(gen_ids, skip_special_tokens=True).strip()
 
     # ------------------------------------------------------------------
     # 2) Post-process: extract the best candidate sentence as final answer
