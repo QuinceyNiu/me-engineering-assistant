@@ -1,4 +1,9 @@
-# src/me_engineering_assistant/graph.py
+"""LangGraph orchestration for the ME Engineering Assistant.
+
+Defines the agent workflow graph (routing -> retrieval -> generation) and exposes a simple
+runner entrypoint for executing the graph on a user question.
+"""
+
 from __future__ import annotations
 
 from typing import Dict, List, TypedDict

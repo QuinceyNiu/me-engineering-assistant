@@ -1,3 +1,9 @@
+"""MLflow pyfunc wrapper for serving the ME Engineering Assistant pipeline.
+
+Implements an MLflow-compatible model that routes questions, retrieves context, and generates
+final answers through the internal agent workflow.
+"""
+
 import pandas as pd
 import mlflow.pyfunc
 

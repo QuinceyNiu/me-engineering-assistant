@@ -1,3 +1,9 @@
+"""Document loading and preprocessing for ECU manuals.
+
+Loads manual files from disk and converts them into chunked text units with metadata,
+ready for embedding and vector indexing.
+"""
+
 from pathlib import Path
 from typing import List, Dict
 
@@ -5,6 +11,9 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 
 def load_markdown(path: Path) -> str:
+    """
+    Load ECU manuals from disk
+    """
     with path.open("r", encoding="utf-8") as f:
         return f.read()
 

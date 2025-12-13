@@ -1,3 +1,9 @@
+"""Vector store construction and access for ECU manuals.
+
+Creates/loads per-manual vector indexes (embeddings + persistent storage) and exposes retrievers
+used by the agent to fetch the most relevant context for a question.
+"""
+
 from typing import Dict, List
 
 from langchain_community.vectorstores import Chroma

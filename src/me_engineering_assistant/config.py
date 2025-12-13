@@ -1,11 +1,11 @@
-from __future__ import annotations
-
 """
 Global configuration constants for the ME Engineering Assistant.
 
 Most values can be overridden via environment variables so that
 the behavior can be tuned without changing code.
 """
+
+from __future__ import annotations
 
 from pathlib import Path
 import os
@@ -49,6 +49,7 @@ def _get_data_dir() -> Path:
     # 5. Last resort: still return src_data (will likely fail, but path is explicit)
     return src_data
 
+
 DATA_DIR = _get_data_dir()
 
 ECU_700_PATH = DATA_DIR / "ECU-700_Series_Manual.md"
@@ -84,7 +85,6 @@ LLM_MODEL_NAME = os.getenv("LLM_MODEL_NAME", DEFAULT_LLM_MODEL_NAME)
 # Limit the number of generated tokens to keep latency within the challenge
 # expectations while still allowing sufficiently detailed answers.
 MAX_NEW_TOKENS = int(os.getenv("LLM_MAX_NEW_TOKENS", "96"))
-
 
 # ---------------------------------------------------------------------------
 # LLM backend selection
