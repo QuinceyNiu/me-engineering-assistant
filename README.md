@@ -198,7 +198,7 @@ Optional (Model Registry alias, local usage only):
 
     models:/me-engineering-assistant@prod
 
-## 🌐 7. Start the FastAPI Server
+## 🌐 8. Start the FastAPI Server
 
 ```bash
 python -m me_engineering_assistant
@@ -210,9 +210,9 @@ http://localhost:8000/predict
 
 ---
 
-## 📡 8. Example API Requests
+## 📡 9. Example API Requests
 
-### 8.1 cURL
+### 9.1 cURL
 
 ```bash
 curl -X POST http://localhost:8000/predict \
@@ -220,7 +220,7 @@ curl -X POST http://localhost:8000/predict \
      -d '{"questions": ["What is the maximum operating temperature of the ECU-850b?"]}'
 ```
 
-### 8.2 Python
+### 9.2 Python
 
 ```python
 import requests
@@ -232,7 +232,7 @@ resp = requests.post(
 print(resp.json())
 ```
 
-### 8.3 Postman
+### 9.3 Postman
 
 * POST ```http://localhost:8000/predict```
 * Body (JSON)
@@ -240,42 +240,6 @@ print(resp.json())
 {
   "questions": ["What is the maximum operating temperature of the ECU-850b?"]
 }
-```
-
----
-
-## 📦 9. MLflow Model Logging & Loading
-
-### Log the model
-```bash
-python -m me_engineering_assistant.log_model
-```
-This will:
-- Log the full agent pipeline
-- Create a new version in MLflow Model Registry
-- Update the prod alias
-
-Example output:
-```bash
-Created version '7' of model 'me-engineering-assistant'
-alias = prod
-```
-
-### Recommended MODEL_URI for serving
-```bash
-models:/me-engineering-assistant@prod
-```
-
-### Load the model in Python
-```python
-import mlflow.pyfunc
-model = mlflow.pyfunc.load_model("models:/me-engineering-assistant@prod")
-```
-
-### FastAPI with MODEL_URI
-```bash
-export MODEL_URI="models:/me-engineering-assistant@prod"
-python -m me_engineering_assistant
 ```
 
 ---
