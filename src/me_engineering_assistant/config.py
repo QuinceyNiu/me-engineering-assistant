@@ -10,6 +10,7 @@ the behavior can be tuned without changing code.
 from pathlib import Path
 import os
 
+
 def _get_data_dir() -> Path:
     """
     Detect the directory that contains the ECU manuals.
@@ -90,7 +91,7 @@ MAX_NEW_TOKENS = int(os.getenv("LLM_MAX_NEW_TOKENS", "96"))
 # ---------------------------------------------------------------------------
 
 # LLM_BACKEND controls whether we use a local model or an online model.
-# - "local": use the local Phi-3 model via transformers (default)
+# - "local": use the local Phi-3 model via transformers
 # - "remote": use a remote open-source model via Hugging Face Inference API
 LLM_BACKEND = os.getenv("LLM_BACKEND", "remote").lower()
 

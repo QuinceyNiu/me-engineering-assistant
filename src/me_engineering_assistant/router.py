@@ -6,15 +6,18 @@ from typing import List, Literal, TypedDict
 
 RouteName = Literal["ECU-700", "ECU-800-base", "ECU-800-plus"]
 
+
 class RoutingDecision(TypedDict):
     routes: List[RouteName]
     reason: str
+
 
 DOC_KEYWORDS = {
     "ECU-700": ["750", "700", "ecu 750", "ecu-750", "ecu700"],
     "ECU-800-base": ["850", "800", "ecu 850", "ecu-850", "ecu800"],
     "ECU-800-plus": ["850b", "850-b", "800 plus", "ecu 850b", "ecu-850b"],
 }
+
 
 def route_question(question: str) -> RoutingDecision:
     """
