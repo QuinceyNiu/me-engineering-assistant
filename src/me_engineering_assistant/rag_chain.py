@@ -1,4 +1,8 @@
-# src/me_engineering_assistant/rag_chain.py
+"""Retrieval-Augmented Generation (RAG) utilities for answering ECU manual questions.
+
+Builds and executes the retrieval + prompting + LLM generation flow, reusing cached components
+to keep latency low during repeated requests.
+"""
 
 from __future__ import annotations
 
@@ -10,7 +14,14 @@ import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from huggingface_hub import InferenceClient
 
-from .config import TOP_K, LLM_MODEL_NAME, MAX_NEW_TOKENS, LLM_BACKEND, HF_TOKEN_ENV_VAR, REMOTE_LLM_MODEL_NAME
+from .config import (
+    TOP_K,
+    LLM_MODEL_NAME,
+    MAX_NEW_TOKENS,
+    LLM_BACKEND,
+    HF_TOKEN_ENV_VAR,
+    REMOTE_LLM_MODEL_NAME,
+)
 
 # ---------------------------------------------------------------------------
 # Lazy-loaded local LLM

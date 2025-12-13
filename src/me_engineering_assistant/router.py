@@ -1,4 +1,9 @@
-# src/me_engineering_assistant/router.py
+"""Rule-based routing for selecting the appropriate ECU manual collection.
+
+Inspects a user question (e.g., model identifiers/keywords) and chooses the best manual(s)
+to query, keeping retrieval focused and reducing cross-manual noise.
+"""
+
 from __future__ import annotations
 
 import re

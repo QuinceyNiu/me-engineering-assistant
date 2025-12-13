@@ -1,3 +1,9 @@
+"""Package entrypoint for running the ME Engineering Assistant.
+
+Enables `python -m me_engineering_assistant` execution to start the API and/or run project
+utilities depending on configured command-line behavior.
+"""
+
 import os
 from pathlib import Path
 

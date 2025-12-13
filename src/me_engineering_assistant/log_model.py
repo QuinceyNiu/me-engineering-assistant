@@ -1,3 +1,9 @@
+"""Model logging utilities for MLflow.
+
+Provides a reproducible script/entrypoint to package and log the ME Engineering Assistant
+pipeline as an MLflow model artifact for local or containerized serving.
+"""
+
 from pathlib import Path
 import shutil
 

@@ -1,3 +1,9 @@
+"""FastAPI service layer for the ME Engineering Assistant.
+
+Defines request/response schemas and exposes HTTP endpoints (e.g., /predict) that call the
+underlying MLflow/agent pipeline to produce answers.
+"""
+
 from typing import List
 
 import pandas as pd
