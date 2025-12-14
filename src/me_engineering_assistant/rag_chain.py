@@ -199,7 +199,7 @@ def _postprocess_full_text(full_text: str) -> str:
     if not full_text:
         return FALLBACK_ANSWER
 
-    # 1) 切掉 prompt/assistant 前缀（尽量保守）
+    # 1) Remove the “prompt/assistant” prefix
     lowered = full_text.lower()
     for marker in ("assistant:", "assistant :"):
         idx = lowered.rfind(marker)
@@ -207,7 +207,7 @@ def _postprocess_full_text(full_text: str) -> str:
             full_text = full_text[idx + len(marker):].strip()
             break
 
-    # 2) 如果混入 fallback，但还有其它内容：删掉 fallback（避免 benchmark 误判 MISS）
+    # 2) If fallback is included but other content is present: remove fallback
     if FALLBACK_ANSWER in full_text:
         cleaned = full_text.replace(FALLBACK_ANSWER, "").strip()
         if cleaned:
@@ -215,16 +215,17 @@ def _postprocess_full_text(full_text: str) -> str:
         else:
             return FALLBACK_ANSWER
 
-    # 3) 优先保留代码块（Q10 这类）
+    # 3) Prioritize retaining code blocks (such as Q10)
     m = re.search(r"```(?:\w+)?\n.*?\n```", full_text, flags=re.S)
     if m:
         return m.group(0).strip()
 
-    # 4) 优先保留 markdown 表格（Q8 这类）
+    # 4) Prioritize preserving Markdown tables (such as Q8)
     if "|" in full_text and "\n" in full_text:
         return full_text.strip()
 
-    # 5) 退回到“择一句话”策略；但如果没标点，就返回第一行非空文本
+    # 5) Fall back to the “select one sentence” strategy;
+    # however, if there is no punctuation, return the first non-empty line of text.
     sentences = re.split(r"(?<=[.!?])\s+", full_text.strip())
     sentences = [s.strip() for s in sentences if s.strip()]
     if sentences:
@@ -327,10 +328,9 @@ def _generate_llm_answer(
                 do_sample=False,
             )
 
-        full_text = tokenizer.decode(
-            outputs[0],
-            skip_special_tokens=True,
-        ).strip()
+        input_len = inputs["input_ids"].shape[1]
+        gen_ids = outputs[0][input_len:]
+        full_text = tokenizer.decode(gen_ids, skip_special_tokens=True).strip()
 
     # ------------------------------------------------------------------
     # 2) Post-process: extract the best candidate sentence as final answer

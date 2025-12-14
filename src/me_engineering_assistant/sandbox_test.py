@@ -7,7 +7,7 @@ from .graph import run_agent
 def main() -> None:
     """Simple CLI smoke test for the agent using a hard-coded example question."""
 
-    question = "How much RAM does the ECU-750 have?"
+    question = "What is the maximum operating temperature for the ECU-750?"
     result = run_agent(question)
 
     print("Question:", question)
