@@ -108,7 +108,7 @@
 <g id="node8" class="node">
 <title>LLM</title>
 <polygon fill="#f3e5f5" stroke="black" points="328.5,-111 185.5,-111 185.5,-73 328.5,-73 328.5,-111"/>
-<text text-anchor="middle" x="257" y="-95.8" font-family="Times,serif" font-size="14.00">Local LLM (Phi&#45;3)</text>
+<text text-anchor="middle" x="257" y="-95.8" font-family="Times,serif" font-size="14.00">LLM</text>
 <text text-anchor="middle" x="257" y="-80.8" font-family="Times,serif" font-size="14.00">Generate Answer</text>
 </g>
 <!-- Vector&#45;&gt;LLM -->
