@@ -21,10 +21,14 @@ from .config import (
     LLM_BACKEND,
     HF_TOKEN_ENV_VAR,
     REMOTE_LLM_MODEL_NAME,
+    MAX_CONTEXT_DOCS,
+    MAX_CONTEXT_CHARS_TOTAL,
+    MAX_CONTEXT_CHARS_PER_DOC,
+    TORCH_NUM_THREADS,
 )
 
 # ---------------------------------------------------------------------------
-# Lazy-loaded local LLM
+# Lazy-loaded LLM backends (process-wide singletons)
 # ---------------------------------------------------------------------------
 
 _DEVICE: Optional[str] = None
@@ -34,6 +38,16 @@ _MODEL: Optional[AutoModelForCausalLM] = None
 _REMOTE_CLIENT: Optional[InferenceClient] = None
 
 FALLBACK_ANSWER = "The manual does not provide this information."
+
+
+def _maybe_set_num_threads() -> None:
+    """Optionally cap PyTorch CPU threads for more predictable latency."""
+    if TORCH_NUM_THREADS:
+        try:
+            torch.set_num_threads(int(TORCH_NUM_THREADS))
+        except (ValueError, RuntimeError):
+            # Ignore invalid values; default behavior is fine.
+            return
 
 
 # ---------------------------------------------------------------------------
@@ -48,31 +62,38 @@ def _select_device_and_dtype() -> tuple[str, torch.dtype]:
     - Prefer Apple Silicon (MPS) when available
     - Otherwise try CUDA
     - Fallback to CPU
+
+    Dtype choices (pragmatic defaults):
+    - MPS:  FP16 is usually faster/more stable than BF16.
+    - CUDA: BF16 is often a good balance if supported; fall back to FP16.
+    - CPU:  FP32 for correctness and broad compatibility.
     """
     if torch.backends.mps.is_available():  # type: ignore[attr-defined]
         device = "mps"
+        dtype = torch.float16
     elif torch.cuda.is_available():
         device = "cuda"
+        # BF16 is typically good on modern NVIDIA GPUs, otherwise FP16.
+        dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
     else:
         device = "cpu"
+        dtype = torch.float32
 
-    # BF16 works well on MPS/CUDA; fall back to FP32 on CPU
-    dtype = torch.bfloat16 if device in {"mps", "cuda"} else torch.float32
     return device, dtype
 
 
 def _ensure_model_loaded() -> None:
     """
-    Lazily load the tokenizer and model on first use.
+    Lazily load the tokenizer and model on first use (local backend only).
 
-    This is only used when LLM_BACKEND == "local".
-    The model is kept in process-wide globals so that repeated calls
-    reuse the same instance.
+    The model is kept in process-wide globals so repeated calls reuse the same instance.
     """
     global _DEVICE, _DTYPE, _TOKENIZER, _MODEL
 
     if _MODEL is not None and _TOKENIZER is not None:
         return
+
+    _maybe_set_num_threads()
 
     device, dtype = _select_device_and_dtype()
     _DEVICE, _DTYPE = device, dtype
@@ -82,11 +103,22 @@ def _ensure_model_loaded() -> None:
         f"on device: {device}, dtype: {dtype}"
     )
 
-    tokenizer = AutoTokenizer.from_pretrained(LLM_MODEL_NAME)
-    model = AutoModelForCausalLM.from_pretrained(
-        LLM_MODEL_NAME,
-        dtype=dtype,
-    )
+    # NOTE:
+    # - Use torch_dtype (transformers arg name) instead of dtype.
+    # - low_cpu_mem_usage helps reduce peak RAM on load.
+    tokenizer = AutoTokenizer.from_pretrained(LLM_MODEL_NAME, use_fast=True)
+
+    # Some transformer versions accept attn_implementation; keep it optional.
+    model_kwargs = {
+        "torch_dtype": dtype,
+        "low_cpu_mem_usage": True,
+    }
+    try:
+        model_kwargs["attn_implementation"] = "sdpa"
+    except Exception:
+        pass
+
+    model = AutoModelForCausalLM.from_pretrained(LLM_MODEL_NAME, **model_kwargs)
     model.to(device)
     model.eval()
 
@@ -95,12 +127,7 @@ def _ensure_model_loaded() -> None:
 
 
 def _ensure_local_model_loaded() -> None:
-    """
-    Backward-compatible alias.
-
-    Some parts of the code call `_ensure_local_model_loaded()`. The actual
-    implementation lives in `_ensure_model_loaded()`.
-    """
+    """Backward-compatible alias."""
     _ensure_model_loaded()
 
 
@@ -108,7 +135,6 @@ def _ensure_remote_client_loaded() -> None:
     """
     Lazily create a Hugging Face InferenceClient for the remote backend.
 
-    This uses the free Hugging Face Inference API (within its rate limits).
     The user must provide an API token via environment variable.
     """
     global _REMOTE_CLIENT
@@ -116,8 +142,7 @@ def _ensure_remote_client_loaded() -> None:
     if _REMOTE_CLIENT is not None:
         return
 
-    # Try the configured env var first, then fall back to HF_TOKEN for
-    # convenience if users already have that set.
+    # Try the configured env var first, then fall back to HF_TOKEN for convenience.
     token = os.getenv(HF_TOKEN_ENV_VAR) or os.getenv("HF_TOKEN")
     if not token:
         raise RuntimeError(
@@ -150,8 +175,7 @@ def _build_prompt(question: str, context: str) -> str:
         Use tokenizer chat template (when available) for best behavior.
         This requires the local tokenizer/model to be loaded.
     - REMOTE:
-        Do NOT load local models. Build a plain-text prompt suitable for
-        Hugging Face text-generation endpoints.
+        Build a plain-text prompt suitable for Hugging Face text-generation endpoints.
     """
     system_msg = (
         'You are the "ME Engineering Assistant", an ECU technical expert. '
@@ -241,45 +265,31 @@ def _postprocess_full_text(full_text: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _generate_llm_answer(
-        prompt: str,
-        max_new_tokens: int = MAX_NEW_TOKENS,
-) -> str:
+def _generate_llm_answer(prompt: str, max_new_tokens: int = MAX_NEW_TOKENS) -> str:
     """
-    Invoke the local LLM to generate the answer.
+    Invoke the selected LLM backend to generate the answer.
 
-    The function:
-      1) Calls the appropriate backend to get the raw generated text.
-      2) Applies post-processing to extract a concise, answer-like sentence.
+    Steps:
+      1) Call backend to get the raw generated text.
+      2) Apply post-processing to extract a concise, answer-like sentence.
     """
-    # ------------------------------------------------------------------
-    # 1) Call the appropriate backend to get the raw generated text
-    # ------------------------------------------------------------------
     if LLM_BACKEND == "remote":
-        # Online open-source model via Hugging Face Inference API.
         _ensure_remote_client_loaded()
         assert _REMOTE_CLIENT is not None
         client = _REMOTE_CLIENT
 
         try:
-            # First try the plain text-generation endpoint.
             full_text = client.text_generation(
                 prompt,
                 max_new_tokens=max_new_tokens,
                 temperature=0.0,
                 do_sample=False,
             )
-            if isinstance(full_text, str):
-                full_text = full_text.strip()
-            else:
-                full_text = str(full_text).strip()
+            full_text = full_text.strip() if isinstance(full_text, str) else str(full_text).strip()
         except ValueError as exc:
-            # Some providers (e.g., certain Llama 3.x instruct models) only
-            # expose the "conversational" task. In that case, fall back to the
-            # chat_completion API, which uses an OpenAI-style chat format.
+            # Some providers expose only the "conversational" task.
             msg = str(exc).lower()
             if "conversational" not in msg:
-                # If the error is unrelated, surface it to the caller.
                 raise
 
             system_prompt = (
@@ -298,18 +308,15 @@ def _generate_llm_answer(
                 temperature=0.0,
             )
 
-            # InferenceClient returns an object with an OpenAI-like structure.
             choice = chat_response.choices[0]
             message = getattr(choice, "message", None)
             if isinstance(message, dict):
                 full_text = str(message.get("content", "")).strip()
             else:
-                # Fallback for the dataclass-style message object.
                 content = getattr(message, "content", "")
                 full_text = str(content).strip()
 
     else:
-        # Local Phi-3 (or any local model configured via LLM_MODEL_NAME).
         _ensure_local_model_loaded()
         assert _TOKENIZER is not None
         assert _MODEL is not None
@@ -319,22 +326,26 @@ def _generate_llm_answer(
         model = _MODEL
         device = _DEVICE
 
-        inputs = tokenizer(prompt, return_tensors="pt").to(device)
+        inputs = tokenizer(prompt, return_tensors="pt")
+        inputs = {k: v.to(device) for k, v in inputs.items()}
+
+        # Ensure generation does not warn about missing pad token.
+        pad_token_id = tokenizer.eos_token_id if tokenizer.eos_token_id is not None else None
 
         with torch.no_grad():
             outputs = model.generate(
                 **inputs,
                 max_new_tokens=max_new_tokens,
                 do_sample=False,
+                num_beams=1,
+                use_cache=True,
+                pad_token_id=pad_token_id,
             )
 
         input_len = inputs["input_ids"].shape[1]
         gen_ids = outputs[0][input_len:]
         full_text = tokenizer.decode(gen_ids, skip_special_tokens=True).strip()
 
-    # ------------------------------------------------------------------
-    # 2) Post-process: extract the best candidate sentence as final answer
-    # ------------------------------------------------------------------
     return _postprocess_full_text(full_text)
 
 
@@ -343,20 +354,47 @@ def _generate_llm_answer(
 # ---------------------------------------------------------------------------
 
 
-def rag_answer(
-        question: str,
-        vs_dict: Dict[str, object],
-        routes: List[str],
-) -> str:
+def _compact_context(docs: List[object]) -> str:
+    """
+    Build a compact context string with hard caps to control prompt length.
+
+    This improves local LLM latency and reduces the chance of "hanging"
+    due to extremely long prompts.
+    """
+    context_parts: List[str] = []
+    seen = set()
+    total_chars = 0
+
+    for d in docs[:MAX_CONTEXT_DOCS]:
+        text = getattr(d, "page_content", "") or ""
+        if not text or text in seen:
+            continue
+        seen.add(text)
+
+        # Per-doc cap
+        text = text[:MAX_CONTEXT_CHARS_PER_DOC]
+
+        # Total cap
+        remaining = MAX_CONTEXT_CHARS_TOTAL - total_chars
+        if remaining <= 0:
+            break
+        text = text[:remaining]
+
+        context_parts.append(text)
+        total_chars += len(text)
+
+    return "\n\n---\n\n".join(context_parts)
+
+
+def rag_answer(question: str, vs_dict: Dict[str, object], routes: List[str]) -> str:
     """
     Perform retrieval-augmented generation:
 
     - Retrieve similar fragments from the selected vector libraries.
-    - Concatenate the context while avoiding duplicates.
-    - Invoke the selected LLM backend (local or remote) to generate the
-      final answer.
+    - Concatenate the context while avoiding duplicates and overly long prompts.
+    - Invoke the selected LLM backend (local or remote) to generate the final answer.
     """
-    docs = []
+    docs: List[object] = []
     for route in routes:
         vs = vs_dict[route]
         docs.extend(vs.similarity_search(question, k=TOP_K))
@@ -364,22 +402,8 @@ def rag_answer(
     if not docs:
         return FALLBACK_ANSWER
 
-    # Concatenate the context while avoiding duplicated fragments and
-    # overly long prompts. The current limit is a pragmatic choice based
-    # on the small size of the manuals and Phi-3 context length.
-    context_parts: List[str] = []
-    seen = set()
-    for d in docs:
-        if d.page_content not in seen:
-            seen.add(d.page_content)
-            context_parts.append(d.page_content)
-
-    context = "\n\n---\n\n".join(context_parts[:8])
-
+    context = _compact_context(docs)
     prompt = _build_prompt(question, context)
     answer = _generate_llm_answer(prompt)
 
-    if not answer:
-        return FALLBACK_ANSWER
-
-    return answer
+    return answer or FALLBACK_ANSWER

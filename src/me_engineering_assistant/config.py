@@ -59,12 +59,37 @@ ECU_800_PLUS_PATH = DATA_DIR / "ECU-800_Series_Plus.md"
 TEST_QUESTIONS_PATH = DATA_DIR / "test-questions.csv"
 
 # ---------------------------------------------------------------------------
+# Vector store (Chroma)
+# ---------------------------------------------------------------------------
+
+# Persist Chroma collections to disk so repeated requests do NOT re-embed manuals.
+#
+# Default:
+# - Source tree: <project_root>/.chroma
+# - Docker:      /app/.chroma  (since DATA_DIR is /app/data)
+#
+# You can override via ME_ASSISTANT_CHROMA_DIR.
+CHROMA_PERSIST_DIR = Path(
+    os.getenv("ME_ASSISTANT_CHROMA_DIR", str(DATA_DIR.parent / ".chroma"))
+)
+
+# Force rebuilding the vector index (useful when chunking params change).
+# Set to "1" to rebuild, otherwise existing persisted indexes are reused.
+RAG_REBUILD_INDEX = os.getenv("RAG_REBUILD_INDEX", "0") == "1"
+
+# ---------------------------------------------------------------------------
 # RAG parameters
 # ---------------------------------------------------------------------------
 
 CHUNK_SIZE = int(os.getenv("RAG_CHUNK_SIZE", "800"))
 CHUNK_OVERLAP = int(os.getenv("RAG_CHUNK_OVERLAP", "150"))
 TOP_K = int(os.getenv("RAG_TOP_K", "4"))
+
+# Hard caps to keep prompts short and latency predictable.
+# These are conservative defaults for local LLMs.
+MAX_CONTEXT_DOCS = int(os.getenv("RAG_MAX_CONTEXT_DOCS", "6"))
+MAX_CONTEXT_CHARS_TOTAL = int(os.getenv("RAG_MAX_CONTEXT_CHARS_TOTAL", "8000"))
+MAX_CONTEXT_CHARS_PER_DOC = int(os.getenv("RAG_MAX_CONTEXT_CHARS_PER_DOC", "2500"))
 
 # ---------------------------------------------------------------------------
 # Embeddings & LLM
@@ -86,6 +111,10 @@ LLM_MODEL_NAME = os.getenv("LLM_MODEL_NAME", DEFAULT_LLM_MODEL_NAME)
 # expectations while still allowing sufficiently detailed answers.
 MAX_NEW_TOKENS = int(os.getenv("LLM_MAX_NEW_TOKENS", "96"))
 
+# Optional: limit CPU threads for more predictable latency on some systems.
+# If unset, PyTorch chooses automatically.
+TORCH_NUM_THREADS = os.getenv("TORCH_NUM_THREADS")
+
 # ---------------------------------------------------------------------------
 # LLM backend selection
 # ---------------------------------------------------------------------------
@@ -93,7 +122,7 @@ MAX_NEW_TOKENS = int(os.getenv("LLM_MAX_NEW_TOKENS", "96"))
 # LLM_BACKEND controls whether we use a local model or an online model.
 # - "local": use the local Phi-3 model via transformers
 # - "remote": use a remote open-source model via Hugging Face Inference API
-LLM_BACKEND = os.getenv("LLM_BACKEND", "local").lower()
+LLM_BACKEND = os.getenv("LLM_BACKEND", "remote").lower()
 
 # Default remote model for the online backend (must be a text-generation model
 # available on Hugging Face Hub). You can override this via environment

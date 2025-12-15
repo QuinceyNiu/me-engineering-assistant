@@ -12,7 +12,7 @@ from langgraph.graph import END, StateGraph
 
 from .router import route_question
 from .rag_chain import rag_answer, FALLBACK_ANSWER
-from .vectorstore import build_vectorstores
+from .vectorstore import get_vectorstores as get_cached_vectorstores
 
 
 class AgentState(TypedDict):
@@ -24,24 +24,16 @@ class AgentState(TypedDict):
     metadata: Dict
 
 
-# In-memory cache for the vectorstores. This is built lazily on first access
-# and reused for all subsequent queries within the same process.
-_VECTORSTORES: Dict[str, object] | None = None
-
-
 def get_vectorstores() -> Dict[str, object]:
     """
-    Lazily build and cache the vectorstores.
+    Return process-wide cached vectorstores.
 
-    For the small ECU manuals used in this challenge it is reasonable to keep
-    the in-memory vectorstores for the lifetime of the process.
+    The vectorstore module handles:
+    - Disk persistence (Chroma persist_directory)
+    - Process-wide singleton caching
+    This avoids re-embedding manuals on restart and keeps per-query latency low.
     """
-    global _VECTORSTORES
-
-    if _VECTORSTORES is None:
-        _VECTORSTORES = build_vectorstores()
-
-    return _VECTORSTORES
+    return get_cached_vectorstores()
 
 
 def router_node(state: AgentState) -> AgentState:
