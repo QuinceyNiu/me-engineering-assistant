@@ -10,7 +10,7 @@ This project demonstrates:
 - MLflow model packaging & serving
 - Dockerized API serving (validated; supports .env configuration)
 
-The system runs fully **offline**, making it suitable for on-premise or restricted environments.
+The system can run fully **offline** when using the local backend, making it suitable for on-premise or restricted environments.
 
 ---
 
@@ -39,10 +39,10 @@ Routing ensures each query is answered using the most relevant manual family.
 Automatically routes each question to the correct ECU manual family using rule-based classification.
 
 ### ✔ Local Phi-3 LLM  
-Runs fully offline using `microsoft/Phi-3-mini-4k-instruct` on CPU or Apple Silicon (MPS + BF16).
+Runs fully offline using `microsoft/Phi-3-mini-4k-instruct` with automatic device selection (MPS/CUDA/CPU) and a fast default dtype (FP16 on MPS).
 
 ### ✔ Efficient Vector Search  
-Uses HuggingFace embeddings + Chroma vectorstore for high-recall context retrieval.
+Uses HuggingFace embeddings + Chroma vectorstore for high-recall context retrieval, with on-disk persistence to avoid re-embedding across restarts.
 
 ### ✔ Modular LangGraph Workflow  
 Separates concerns: routing → retrieval → answer generation.
@@ -143,11 +143,23 @@ pip install -e .
 
 ## 🚀 6. Running Locally (CLI)
 
-### 6.1 Local Phi-3 (default)
+### 6.1 Local Phi-3 (offline)
+
+First run (build vector index once):
 ```bash
 export LLM_BACKEND=local
 export LLM_MODEL_NAME="microsoft/Phi-3-mini-4k-instruct"
+export RAG_REBUILD_INDEX=1
+python -m me_engineering_assistant.sandbox_test
 ```
+
+Subsequent runs (reuse the persisted index):
+```bash
+export LLM_BACKEND=local
+export RAG_REBUILD_INDEX=0
+python -m me_engineering_assistant.sandbox_test
+```
+
 ### 6.2 Remote open-source LLM (HuggingFace Inference API)
 
 Create `.env` from the template:
@@ -160,9 +172,24 @@ Edit `.env` and set:
     REMOTE_LLM_MODEL_NAME=meta-llama/Llama-3.2-1B-Instruct
     HUGGINGFACEHUB_API_TOKEN=hf_xxx
 
+Then run:
+
+```bash
+python -m me_engineering_assistant.sandbox_test
+```
+
 The project autoloads `.env` via `python-dotenv`.
 
 All entrypoints (CLI, FastAPI, MLflow logging) obey these settings.
+
+### 6.3 Configuration reference (env vars)
+
+- `ME_ASSISTANT_CHROMA_DIR`: directory for persisted Chroma indexes (default: `<project_root>/.chroma`)
+- `RAG_REBUILD_INDEX=1`: force rebuild of the vector index (use after changing manuals or chunking params)
+- `RAG_CHUNK_SIZE`, `RAG_CHUNK_OVERLAP`, `RAG_TOP_K`: retrieval parameters
+- `RAG_MAX_CONTEXT_DOCS`, `RAG_MAX_CONTEXT_CHARS_TOTAL`, `RAG_MAX_CONTEXT_CHARS_PER_DOC`: prompt caps for latency control
+- `LLM_MAX_NEW_TOKENS`: generation cap (latency control)
+- `TORCH_NUM_THREADS`: optional CPU thread cap for more predictable latency
 
 ---
 
@@ -365,21 +392,22 @@ Notes:
 ### LLM-related
 
 - Local backend (Phi-3)
-
-    - Highest correctness but slower inference
-    - May hallucinate under ambiguous context
+  - Fully offline, but latency depends on hardware (CPU vs MPS/CUDA) and prompt length.
+  - The first request can be slower due to model warm-up.
 
 - Remote backend (Llama-3.x)
+  - Often lower latency, but depends on network and provider rate limits/availability.
 
-    - Lower latency but dependent on HuggingFace API rate limits
-    - Occasional fallback responses when API returns minimal content
+### Retrieval / indexing
+
+- Vector search uses a persisted Chroma index on disk; the **first build** may take longer.
+- If you change manuals or chunking parameters, rebuild the index with `RAG_REBUILD_INDEX=1`.
 
 ### System limitations
 
-- Router is rule-based (no embedding classifier yet
-- Vectorstore is rebuilt at runtime (non-persistent)
-- No streaming inference
-- Remote backend adds external dependency (network + HF API availability)
+- Router is rule-based (no embedding-based classifier yet).
+- No streaming responses.
+- Remote backend adds an external dependency (network + HF API availability).
 
 ---
 
@@ -400,27 +428,28 @@ Notes:
 
 ### Retrieval Performance
 
-- Persistent FAISS/Chroma index
-- Quantized Phi-3 for faster inference
+- Optional reranking (cross-encoder) for higher precision
+- FAISS/ANN alternative index for faster retrieval at scale
+- Quantized Phi-3 / llama.cpp backend for faster local inference
 
 ---
 
 ## 🏁 14. Challenge Requirements Alignment
 
-| Requirement                 | Status                                    |         |
-|-----------------------------|-------------------------------------------|---------|
-| Multi-source RAG            | ✔ Implemented                             |         |
-| Intelligent routing         | ✔ Router node                             |         |
-| LangGraph agent             | ✔ Two-node workflow (router → RAG)        |         |
-| MLflow model logging        | ✔ Custom pyfunc, versioned, prod alias    |         |
-| REST API                    | ✔ FastAPI `/predict` loading MLflow model |         |
-| Dockerization               | ✔ Validated for remote backend            |         |
-| Local LLM inference         | ✔ Phi-3-mini (offline)                    |         |
-| Online LLM inference        | ✔ Llama-3.x via HuggingFace API (free)    |         |
-| Backend configurability     | ✔ `LLM_BACKEND=local                      | remote` |
-| Architectural documentation | ✔ Included                                |         |
-| Testing strategy            | ✔ Local + Remote benchmarks & pytest      |         |
-| Limitations & future work   | ✔ Documented                              |         |
+| Requirement                 | Status                                       |     |
+|-----------------------------|----------------------------------------------|-----|
+| Multi-source RAG            | ✔ Implemented                                |     |
+| Intelligent routing         | ✔ Router node                                |     |
+| LangGraph agent             | ✔ Two-node workflow (router → RAG)           |     |
+| MLflow model logging        | ✔ Custom pyfunc, versioned, prod alias       |     |
+| REST API                    | ✔ FastAPI `/predict` loading MLflow model    |     |
+| Dockerization               | ✔ Validated for remote backend               |     |
+| Local LLM inference         | ✔ Phi-3-mini (offline)                       |     |
+| Online LLM inference        | ✔ Llama-3.x via HuggingFace API (free)       |     |
+| Backend configurability     | ✔ `LLM_BACKEND=local` / `LLM_BACKEND=remote` |     |
+| Architectural documentation | ✔ Included                                   |     |
+| Testing strategy            | ✔ Local + Remote benchmarks & pytest         |     |
+| Limitations & future work   | ✔ Documented                                 |     |
 
 
 ---

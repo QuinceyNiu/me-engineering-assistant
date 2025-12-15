@@ -31,6 +31,7 @@ checkpoints/
 
 # ---- For safety, if HF cache is accidentally placed in project, it won't be committed ----
 .cache/
+.chroma/
 
 # Secrets
 .env
