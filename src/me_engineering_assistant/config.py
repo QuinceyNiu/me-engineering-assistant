@@ -122,7 +122,7 @@ TORCH_NUM_THREADS = os.getenv("TORCH_NUM_THREADS")
 # LLM_BACKEND controls whether we use a local model or an online model.
 # - "local": use the local Phi-3 model via transformers
 # - "remote": use a remote open-source model via Hugging Face Inference API
-LLM_BACKEND = os.getenv("LLM_BACKEND", "remote").lower()
+LLM_BACKEND = os.getenv("LLM_BACKEND", "local").lower()
 
 # Default remote model for the online backend (must be a text-generation model
 # available on Hugging Face Hub). You can override this via environment
