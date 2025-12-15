@@ -108,7 +108,7 @@ me-engineering-assistant/
 
 ## 🧠 4. System Architecture
 
-![ME Engineering Assistant Architecture](data/me_engineering_assistant_architecture.svg)
+![ME Engineering Assistant Architecture](me_engineering_assistant_architecture.svg)
 
 ---
 
