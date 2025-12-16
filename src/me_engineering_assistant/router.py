@@ -36,15 +36,43 @@ def route_question(question: str) -> RoutingDecision:
     q = question.lower()
 
     # Detect patterns like "ECU-750", "ECU 850b", etc.
-    m = re.search(r"\becu[-\s]?(\d{3})([a-z])?\b", q)
-    if m:
-        model = f"{m.group(1)}{m.group(2) or ''}".lower()  # e.g. "750", "850b"
-        known_models = {"700", "750", "800", "850", "850b"}
-        if model not in known_models:
+    matches = re.findall(r"\becu[-\s]?(\d{3})([a-z])?\b", q)
+
+    if matches:
+        # Normalize all mentioned models, e.g. [("850",""),("850","b")] -> ["850","850b"]
+        mentioned_models = [f"{num}{suffix or ''}".lower() for (num, suffix) in matches]
+
+        model_to_routes: dict[str, List[RouteName]] = {
+            "700": ["ECU-700"],
+            "750": ["ECU-700"],
+            "800": ["ECU-800-base"],
+            "850": ["ECU-800-base"],
+            "850b": ["ECU-800-plus"],
+        }
+
+        unknown = sorted({m for m in mentioned_models if m not in model_to_routes})
+        if unknown:
             return {
                 "routes": [],
-                "reason": f"Unknown ECU model ECU-{model.upper()}, refusing broad fallback.",
+                "reason": "Unknown ECU model(s) "
+                          + ", ".join(f"ECU-{m.upper()}" for m in unknown)
+                          + ", refusing broad fallback.",
             }
+
+        # Union routes across all mentioned models, keep stable order
+        routes: List[RouteName] = []
+        for m in mentioned_models:
+            for r in model_to_routes[m]:
+                if r not in routes:
+                    routes.append(r)
+
+        return {
+            "routes": routes,
+            "reason": "Explicit ECU model(s) "
+                      + ", ".join(f"ECU-{m.upper()}" for m in sorted(set(mentioned_models)))
+                      + " -> "
+                      + ", ".join(routes),
+        }
 
     selected: List[RouteName] = []
     for route, keywords in DOC_KEYWORDS.items():
