@@ -358,7 +358,24 @@ The agent is considered valid when:
 
 ---
 
-## 🐳 11. Containerization (Docker)
+## 11. Code Quality Checks
+
+This repository is designed to pass the basic quality requirement from the challenge:
++**pylint score > 85%**.
+
+Run:
+```bash
+pylint src/me_engineering_assistant
+```
+
+Current result (example):
+```text
+Your code has been rated at 9.71/10
+```
+
+---
+
+## 🐳 12. Containerization (Docker)
 
 A Dockerfile is included to serve the agent as an HTTP API.
 The container can serve the agent using either LLM backend:
@@ -366,7 +383,7 @@ The container can serve the agent using either LLM backend:
 - Local: Phi-3-mini model loaded via transformers
 - Remote: Llama-3.x hosted on HuggingFace Inference API (free tier compatible)
 
-### 11.1 Build image
+### 12.1 Build image
 
 > Make sure you have already logged a model locally (see section **7. MLflow Model Logging**)
 > so that the `mlruns/` directory contains the latest artifacts.
@@ -382,13 +399,13 @@ The Dockerfile copies the following into the image:
 - data/ → /app/data
 - saved_model/ → /app/saved_model
 
-### 11.2 Prepare environment variables
+### 12.2 Prepare environment variables
 
 Copy the template and fill in your HuggingFace token:
 
     cp .env.example .env
 
-### 11.3 Run container (one-liner)
+### 12.3 Run container (one-liner)
 
     docker run --env-file .env -p 8000:8000 me-assistant
 
@@ -401,7 +418,7 @@ Notes:
 
 ---
 
-## ⚠️ 12. Limitations
+## ⚠️ 13. Limitations
 
 ### LLM-related
 
@@ -425,7 +442,7 @@ Notes:
 
 ---
 
-## 🚧 13. Future Work
+## 🚧 14. Future Work
 
 ### MLOps Enhancements
 
@@ -448,7 +465,7 @@ Notes:
 
 ---
 
-## 🏁 14. Challenge Requirements Alignment
+## 🏁 15. Challenge Requirements Alignment
 
 | Requirement                 | Status                                       |     |
 |-----------------------------|----------------------------------------------|-----|
