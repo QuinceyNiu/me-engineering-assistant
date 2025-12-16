@@ -2,13 +2,20 @@
 
 Builds and executes the retrieval + prompting + LLM generation flow, reusing cached components
 to keep latency low during repeated requests.
+
+Quality improvements in this file:
+- Question-aware intent detection (compare/list/how-to/across-all)
+- Multi-query retrieval for better coverage on compare/list questions
+- Preserve bullet lists/tables/code blocks in post-processing (avoid truncating multi-item answers)
+- Dynamic max_new_tokens for complex questions
+- Optional second-pass completion when the answer misses models mentioned in the question
 """
 
 from __future__ import annotations
 
 import os
-from typing import Dict, List, Optional
 import re
+from typing import Dict, List, Optional, Set
 
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -38,6 +45,91 @@ _MODEL: Optional[AutoModelForCausalLM] = None
 _REMOTE_CLIENT: Optional[InferenceClient] = None
 
 FALLBACK_ANSWER = "The manual does not provide this information."
+
+# Regex for detecting ECU model identifiers in questions/answers.
+_MODEL_RE = re.compile(r"\bECU-\d{3}[a-z]?\b", re.IGNORECASE)
+
+# Simple patterns for question intent detection.
+_COMPARE_RE = re.compile(r"\b(compare|difference|differences|versus|vs\.)\b", re.IGNORECASE)
+_ACROSS_RE = re.compile(r"\b(across|all\s+ecu|all\s+models|across\s+all)\b", re.IGNORECASE)
+_LIST_RE = re.compile(r"\b(which\s+ecu|which\s+models|list\s+all|supported\s+models)\b", re.IGNORECASE)
+_HOWTO_RE = re.compile(r"\b(how\s+do\s+you|how\s+to|enable|configure)\b", re.IGNORECASE)
+
+
+def _extract_models(text: str) -> List[str]:
+    """Extract unique model IDs like ECU-850b, preserving first-seen order."""
+    seen: Set[str] = set()
+    out: List[str] = []
+    for m in _MODEL_RE.findall(text or ""):
+        mm = m.upper()
+        if mm not in seen:
+            seen.add(mm)
+            out.append(mm)
+    return out
+
+
+def _analyze_question(question: str) -> Dict[str, object]:
+    """Lightweight intent analysis to drive retrieval and formatting."""
+    q = (question or "").strip()
+    return {
+        "models": _extract_models(q),
+        "is_compare": bool(_COMPARE_RE.search(q)),
+        "is_across": bool(_ACROSS_RE.search(q)),
+        "is_list": bool(_LIST_RE.search(q)),
+        "is_howto": bool(_HOWTO_RE.search(q)),
+    }
+
+
+def _build_multi_queries(question: str, intent: Dict[str, object]) -> List[str]:
+    """Create additional sub-queries for better coverage on compare/list questions."""
+    queries = [question]
+    models: List[str] = intent.get("models", [])  # type: ignore[assignment]
+
+    # Common fields that repeatedly appear in your benchmark set.
+    fields = [
+        "operating temperature",
+        "RAM",
+        "LPDDR",
+        "storage",
+        "eMMC",
+        "power consumption",
+        "current",
+        "CAN",
+        "CAN FD",
+        "OTA",
+        "Over-the-Air",
+        "NPU",
+        "TOPS",
+        "clock speed",
+        "GHz",
+    ]
+
+    # Compare/differences or across-all: force retrieval for each model + each key field.
+    if intent.get("is_compare") or intent.get("is_across"):
+        for m in models:
+            for f in fields:
+                queries.append(f"{m} {f}")
+
+    # List/support questions: query the capability term directly.
+    if intent.get("is_list"):
+        ql = question.lower()
+        if "ota" in ql or "over-the-air" in ql:
+            queries.append("OTA updates supported models")
+            queries.append("Over-the-Air updates supported models")
+
+    # De-duplicate while preserving order.
+    seen: Set[str] = set()
+    out: List[str] = []
+    for q in queries:
+        qq = q.strip()
+        if not qq:
+            continue
+        key = qq.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(qq)
+    return out
 
 
 def _maybe_set_num_threads() -> None:
@@ -73,7 +165,6 @@ def _select_device_and_dtype() -> tuple[str, torch.dtype]:
         dtype = torch.float16
     elif torch.cuda.is_available():
         device = "cuda"
-        # BF16 is typically good on modern NVIDIA GPUs, otherwise FP16.
         dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
     else:
         device = "cpu"
@@ -103,12 +194,8 @@ def _ensure_model_loaded() -> None:
         f"on device: {device}, dtype: {dtype}"
     )
 
-    # NOTE:
-    # - Use torch_dtype (transformers arg name) instead of dtype.
-    # - low_cpu_mem_usage helps reduce peak RAM on load.
     tokenizer = AutoTokenizer.from_pretrained(LLM_MODEL_NAME, use_fast=True)
 
-    # Some transformer versions accept attn_implementation; keep it optional.
     model_kwargs = {
         "torch_dtype": dtype,
         "low_cpu_mem_usage": True,
@@ -142,7 +229,6 @@ def _ensure_remote_client_loaded() -> None:
     if _REMOTE_CLIENT is not None:
         return
 
-    # Try the configured env var first, then fall back to HF_TOKEN for convenience.
     token = os.getenv(HF_TOKEN_ENV_VAR) or os.getenv("HF_TOKEN")
     if not token:
         raise RuntimeError(
@@ -167,7 +253,7 @@ def _ensure_remote_client_loaded() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _build_prompt(question: str, context: str) -> str:
+def _build_prompt(question: str, context: str, intent: Dict[str, object]) -> str:
     """
     Build a prompt for the selected backend.
 
@@ -180,22 +266,35 @@ def _build_prompt(question: str, context: str) -> str:
     system_msg = (
         'You are the "ME Engineering Assistant", an ECU technical expert. '
         "Answer strictly based on the provided ECU manual context. "
-        'If the answer is not present in the context, reply exactly: '
+        "Do NOT guess or add specs that are not explicitly stated in the context. "
+        "If the answer is not present in the context, reply exactly: "
         '"The manual does not provide this information."'
     )
+
+    # Output-format hints to improve completeness on compare/list questions.
+    format_hints: List[str] = ["Answer in concise, professional English for an engineer."]
+    if intent.get("is_howto"):
+        format_hints.append("If a command is needed, output it in a single Markdown code block.")
+    if intent.get("is_compare") or intent.get("is_across"):
+        format_hints.append(
+            "If the question asks to compare models, answer with a short Markdown table or bullet list "
+            "covering all relevant fields (e.g., CPU/clock, RAM, storage, AI/NPU/TOPS, temperature, buses)."
+        )
+        format_hints.append("Make sure every mentioned model in the question appears in the final answer.")
+    if intent.get("is_list"):
+        format_hints.append("If multiple models apply, list ALL applicable ECU model names explicitly.")
+
     user_msg = (
         f"CONTEXT:\n{context}\n\n"
         f"QUESTION:\n{question}\n\n"
-        "Answer in concise, professional English for an engineer."
+        + "\n".join(f"- {h}" for h in format_hints)
     )
 
-    # Remote backend: never touch local model/tokenizer.
     if LLM_BACKEND == "remote":
         return system_msg + "\n\n" + user_msg + "\n\nAnswer:"
 
-    # Local backend: load model/tokenizer lazily and prefer chat template.
     _ensure_model_loaded()
-    assert _TOKENIZER is not None  # for type checkers
+    assert _TOKENIZER is not None
     tokenizer = _TOKENIZER
 
     messages = [
@@ -210,7 +309,6 @@ def _build_prompt(question: str, context: str) -> str:
             add_generation_prompt=True,
         )
     except Exception:
-        # If chat template is not available, fall back to plain prompt.
         return system_msg + "\n\n" + user_msg + "\n\nAnswer:"
 
 
@@ -220,10 +318,11 @@ def _build_prompt(question: str, context: str) -> str:
 
 
 def _postprocess_full_text(full_text: str) -> str:
+    """Extract a concise-but-complete answer while preserving multi-item outputs."""
     if not full_text:
         return FALLBACK_ANSWER
 
-    # 1) Remove the “prompt/assistant” prefix
+    # 1) Remove assistant markers if they appear
     lowered = full_text.lower()
     for marker in ("assistant:", "assistant :"):
         idx = lowered.rfind(marker)
@@ -239,17 +338,21 @@ def _postprocess_full_text(full_text: str) -> str:
         else:
             return FALLBACK_ANSWER
 
-    # 3) Prioritize retaining code blocks (such as Q10)
+    # 3) Preserve code blocks (e.g., enable/command questions)
     m = re.search(r"```(?:\w+)?\n.*?\n```", full_text, flags=re.S)
     if m:
         return m.group(0).strip()
 
-    # 4) Prioritize preserving Markdown tables (such as Q8)
+    # 4) Preserve Markdown tables
     if "|" in full_text and "\n" in full_text:
         return full_text.strip()
 
-    # 5) Fall back to the “select one sentence” strategy;
-    # however, if there is no punctuation, return the first non-empty line of text.
+    # 5) Preserve bullet/numbered lists to avoid dropping important items
+    lines = [ln.rstrip() for ln in full_text.splitlines() if ln.strip()]
+    if any(re.match(r"^\s*([-*]|\d+\.)\s+", ln) for ln in lines):
+        return "\n".join(lines).strip()
+
+    # 6) Fallback: pick a single sentence (prefer one containing digits)
     sentences = re.split(r"(?<=[.!?])\s+", full_text.strip())
     sentences = [s.strip() for s in sentences if s.strip()]
     if sentences:
@@ -271,7 +374,7 @@ def _generate_llm_answer(prompt: str, max_new_tokens: int = MAX_NEW_TOKENS) -> s
 
     Steps:
       1) Call backend to get the raw generated text.
-      2) Apply post-processing to extract a concise, answer-like sentence.
+      2) Apply post-processing to preserve multi-item outputs when present.
     """
     if LLM_BACKEND == "remote":
         _ensure_remote_client_loaded()
@@ -287,7 +390,6 @@ def _generate_llm_answer(prompt: str, max_new_tokens: int = MAX_NEW_TOKENS) -> s
             )
             full_text = full_text.strip() if isinstance(full_text, str) else str(full_text).strip()
         except ValueError as exc:
-            # Some providers expose only the "conversational" task.
             msg = str(exc).lower()
             if "conversational" not in msg:
                 raise
@@ -295,6 +397,7 @@ def _generate_llm_answer(prompt: str, max_new_tokens: int = MAX_NEW_TOKENS) -> s
             system_prompt = (
                 'You are the "ME Engineering Assistant", an ECU technical expert. '
                 "Answer strictly based on the provided ECU manual context. "
+                "Do NOT guess or add specs that are not explicitly stated in the context. "
                 'If the answer is not present in the context, reply exactly: '
                 '"The manual does not provide this information."'
             )
@@ -329,7 +432,6 @@ def _generate_llm_answer(prompt: str, max_new_tokens: int = MAX_NEW_TOKENS) -> s
         inputs = tokenizer(prompt, return_tensors="pt")
         inputs = {k: v.to(device) for k, v in inputs.items()}
 
-        # Ensure generation does not warn about missing pad token.
         pad_token_id = tokenizer.eos_token_id if tokenizer.eos_token_id is not None else None
 
         with torch.no_grad():
@@ -358,7 +460,7 @@ def _compact_context(docs: List[object]) -> str:
     """
     Build a compact context string with hard caps to control prompt length.
 
-    This improves local LLM latency and reduces the chance of "hanging"
+    This improves local LLM latency and reduces the chance of hanging
     due to extremely long prompts.
     """
     context_parts: List[str] = []
@@ -371,7 +473,15 @@ def _compact_context(docs: List[object]) -> str:
             continue
         seen.add(text)
 
-        # Per-doc cap
+        # Add lightweight provenance to improve grounding.
+        meta = getattr(d, "metadata", {}) or {}
+        src = str(meta.get("source", ""))
+        idx = meta.get("chunk_index", None)
+        header = ""
+        if src:
+            header = f"[{src}{' #' + str(idx) if idx is not None else ''}]\n"
+
+        # Per-doc cap (body only)
         text = text[:MAX_CONTEXT_CHARS_PER_DOC]
 
         # Total cap
@@ -380,30 +490,85 @@ def _compact_context(docs: List[object]) -> str:
             break
         text = text[:remaining]
 
-        context_parts.append(text)
-        total_chars += len(text)
+        snippet = (header + text).strip()
+        context_parts.append(snippet)
+        total_chars += len(snippet)
 
     return "\n\n---\n\n".join(context_parts)
+
+
+def _dynamic_max_new_tokens(intent: Dict[str, object]) -> int:
+    """Use a higher token budget for compare/list questions to avoid truncation."""
+    if intent.get("is_compare") or intent.get("is_across"):
+        return max(MAX_NEW_TOKENS, 180)
+    if intent.get("is_list"):
+        return max(MAX_NEW_TOKENS, 140)
+    return MAX_NEW_TOKENS
+
+
+def _retrieve_docs(
+    queries: List[str],
+    vs_dict: Dict[str, object],
+    routes: List[str],
+    k_per_query: int,
+) -> List[object]:
+    """Retrieve docs across routes for multiple queries and de-duplicate."""
+    all_docs: List[object] = []
+    seen_text: Set[str] = set()
+
+    for q in queries:
+        for route in routes:
+            vs = vs_dict[route]
+            for d in vs.similarity_search(q, k=k_per_query):
+                txt = getattr(d, "page_content", "") or ""
+                if not txt or txt in seen_text:
+                    continue
+                seen_text.add(txt)
+                all_docs.append(d)
+    return all_docs
 
 
 def rag_answer(question: str, vs_dict: Dict[str, object], routes: List[str]) -> str:
     """
     Perform retrieval-augmented generation:
 
-    - Retrieve similar fragments from the selected vector libraries.
-    - Concatenate the context while avoiding duplicates and overly long prompts.
-    - Invoke the selected LLM backend (local or remote) to generate the final answer.
+    - Multi-query retrieval for coverage on compare/list questions.
+    - Compact context with hard caps.
+    - Call local or remote LLM to generate the final answer.
+    - Optional second pass if the answer misses models mentioned in the question.
     """
-    docs: List[object] = []
-    for route in routes:
-        vs = vs_dict[route]
-        docs.extend(vs.similarity_search(question, k=TOP_K))
+    intent = _analyze_question(question)
+
+    queries = _build_multi_queries(question, intent)
+    k_per_query = 2 if (intent.get("is_compare") or intent.get("is_across") or intent.get("is_list")) else TOP_K
+    k_per_query = min(TOP_K, k_per_query) if k_per_query else TOP_K
+
+    docs = _retrieve_docs(queries, vs_dict, routes, k_per_query=k_per_query)
 
     if not docs:
         return FALLBACK_ANSWER
 
     context = _compact_context(docs)
-    prompt = _build_prompt(question, context)
-    answer = _generate_llm_answer(prompt)
+    prompt = _build_prompt(question, context, intent)
+    answer = _generate_llm_answer(prompt, max_new_tokens=_dynamic_max_new_tokens(intent))
+
+    # Second-pass completion: if the question mentions multiple models but the
+    # answer mentions only a subset, try a small targeted retrieval and re-answer.
+    q_models = _extract_models(question)
+    a_models = _extract_models(answer)
+    if (intent.get("is_compare") or intent.get("is_list") or intent.get("is_across")) and len(q_models) >= 2:
+        missing = [m for m in q_models if m not in a_models]
+        if missing:
+            extra_queries: List[str] = []
+            for m in missing:
+                extra_queries.append(f"{m} {question}")
+                extra_queries.append(f"{m} specifications")
+            extra_docs = _retrieve_docs(extra_queries, vs_dict, routes, k_per_query=2)
+            if extra_docs:
+                context2 = _compact_context(docs + extra_docs)
+                prompt2 = _build_prompt(question, context2, intent)
+                answer2 = _generate_llm_answer(prompt2, max_new_tokens=_dynamic_max_new_tokens(intent))
+                if answer2:
+                    answer = answer2
 
     return answer or FALLBACK_ANSWER
