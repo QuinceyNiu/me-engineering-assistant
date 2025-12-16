@@ -3,14 +3,16 @@
 A production-ready **Retrieval-Augmented Generation (RAG)** system that answers engineering questions using ECU (Electronic Control Unit) technical manuals.
 
 This project demonstrates:
-- Local LLM inference (Phi-3 Mini)
+- Local LLM inference (Phi-3 Mini, offline)
+- Remote LLM inference (HuggingFace Inference API, configurable)
 - Multi-document RAG
 - Query routing across multiple ECU models
 - FastAPI RESTful service
 - MLflow model packaging & serving
 - Dockerized API serving (validated; supports .env configuration)
 
-The system can run fully **offline** when using the local backend, making it suitable for on-premise or restricted environments.
+The system can run fully offline when using the local backend, making it suitable for on-premise or restricted environments.
+When configured with the remote backend, it can trade offline capability for potentially lower latency (network permitting).
 
 ---
 
@@ -41,8 +43,14 @@ Automatically routes each question to the correct ECU manual family using rule-b
 ### ✔ Local Phi-3 LLM  
 Runs fully offline using `microsoft/Phi-3-mini-4k-instruct` with automatic device selection (MPS/CUDA/CPU) and a fast default dtype (FP16 on MPS).
 
+### ✔ Remote open-source LLM (HuggingFace Inference API)
+Supports a remote backend via environment configuration (e.g., `LLM_BACKEND=remote`) so the same pipeline can run either
+offline (local) or over the network (remote) without code changes.
+
 ### ✔ Efficient Vector Search  
-Uses HuggingFace embeddings + Chroma vectorstore for high-recall context retrieval, with on-disk persistence to avoid re-embedding across restarts.
+Uses HuggingFace embeddings + Chroma vectorstore for high-recall context retrieval, with on-disk persistence to avoid re-embedding across restarts.  
+<br>Tip: the persisted Chroma index defaults to `<project_root>/.chroma`. Keeping this cache between runs can significantly reduce
+end-to-end latency for the local backend by avoiding repeated embedding + indexing work.
 
 ### ✔ Modular LangGraph Workflow  
 Separates concerns: routing → retrieval → answer generation.
@@ -66,7 +74,7 @@ me-engineering-assistant/
 │
 ├── README.md                      # Project documentation
 ├── pyproject.toml                 # Dependencies & build config
-├── dockerfile                     # Docker build instructions (validated; .env-friendly)
+├── Dockerfile                     # Docker build instructions (validated; .env-friendly)
 ├── project_tree.txt               # Auto-generated project structure
 ├── .env.example                   # Environment template (no secrets)
 ├── .gitignore                     # Ignore local artifacts & secrets
@@ -82,6 +90,8 @@ me-engineering-assistant/
 │
 ├── mlruns/                        # Local MLflow tracking directory (generated, gitignored)
 │   └── ... (local runs / registry metadata; optional for end users)
+│
+├── .chroma/                       # (Generated) persisted Chroma indexes for faster restarts (gitignored)
 │
 ├── src/
 │   └── me_engineering_assistant/
@@ -312,6 +322,7 @@ A dedicated benchmark script is provided for detailed inspection of:
 - The exact answer returned for each question
 - End-to-end latency per query
 - Overall accuracy
+- Expected-answer grading (per-question + aggregated)
 - Totals and summary metrics
 
 Run the benchmark:
@@ -321,18 +332,21 @@ python -m tests.benchmark
 
 Example output:
 ```bash
-01. [OK ] 4.82s
+01. [OK ] 4.82s | score=1.00
     Q: How much RAM does the ECU-850 have?
     A: The ECU-850 has 2 GB of LPDDR4 RAM.
 ...
 Summary:
 - Questions         : 10
-- Answered          : 10 (100%)
-- Avg time / q      : 11.03s
-- Max time / q      : 23.77s
-- Total runtime     : 110.28s
+- OK                : 10 (100%)
+- Partial           : 0 (0%)
+- Miss              : 0 (0%)
+- Avg time / q      : 9.10s
+- Max time / q      : 37.34s
+- Total runtime     : 90.98s
 ```
-This script is intended for human inspection and performance reporting, and is not part of the automated pytest suite.
+This script is intended for performance reporting and answer-quality inspection, and is not part of the automated pytest suite.  
+For the exact grading rules (e.g., partial credit), see the benchmark implementation in `tests/benchmark.py`.
 
 ### 10.3 Validation Criteria
 
@@ -457,6 +471,8 @@ Notes:
 ## 🙌 Acknowledgements
 
 - Microsoft Phi-3 Model
+- meta-llama/Llama-3.2-1B-Instruct
 - LangChain / LangGraph
 - MLflow
+- Docker
 - ChromaDB
