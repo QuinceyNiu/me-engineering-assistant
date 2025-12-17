@@ -1,14 +1,48 @@
-"""Retrieval-Augmented Generation (RAG) utilities for answering ECU manual questions.
+"""
+Retrieval-Augmented Generation (RAG) utilities for answering ECU manual questions.
 
-Builds and executes the retrieval + prompting + LLM generation flow, reusing cached components
-to keep latency low during repeated requests.
+This module builds and executes the retrieval → prompting → generation pipeline and
+keeps heavy components (LLM/tokenizer/remote client) lazily loaded and cached.
 
-Quality improvements in this file:
-- Question-aware intent detection (compare/list/how-to/across-all)
-- Multi-query retrieval for better coverage on compare/list questions
-- Preserve bullet lists/tables/code blocks in post-processing (avoid truncating multi-item answers)
-- Dynamic max_new_tokens for complex questions
-- Optional second-pass completion when the answer misses models mentioned in the question
+Key improvements in this version (quality-focused, not tied to any fixed benchmark set):
+
+- Question intent detection:
+  Detects high-level intents (compare / list / across-all / how-to) and extracts ECU model
+  identifiers from the user question. This allows the system to adapt retrieval strategy,
+  prompt format, and output constraints to the question type.
+
+- Multi-query retrieval for coverage:
+  For compare/list/across-all questions, generates additional sub-queries (e.g., per-model
+  + per-field) and retrieves documents for each query across the selected routes. This
+  reduces “missing attribute” answers caused by single-query retrieval returning only one
+  relevant fragment (common in comparison and aggregation questions).
+
+- Context compaction with lightweight provenance:
+  Context is compacted with hard caps to control prompt size, and each chunk is optionally
+  annotated with a short source tag (e.g., [source #chunk]) to improve grounding and make
+  the generated answer more evidence-aligned.
+
+- Prompting improvements for completeness and format:
+  The prompt includes explicit instructions to:
+    * answer strictly from provided context (no guessing),
+    * use tables/bullets for comparisons and aggregations,
+    * list ALL applicable models for “which models support …” questions,
+    * output commands in a single Markdown code block for how-to/enable questions.
+
+- Output post-processing that preserves structured answers:
+  Post-processing is designed to keep multi-item outputs intact (Markdown bullet/numbered
+  lists, tables, and code blocks) instead of collapsing answers into a single sentence,
+  preventing accidental truncation of multi-model/ multi-attribute responses.
+
+- Dynamic generation budget:
+  Increases max_new_tokens for compare/list/across-all questions to reduce truncation on
+  longer, structured answers while keeping simple Q&A fast.
+
+- Optional second-pass completion:
+  For multi-model questions, if the first answer is missing one or more models mentioned
+  in the question, the pipeline performs a small targeted retrieval for the missing models
+  and re-generates the answer using the enriched context. This boosts completeness without
+  globally increasing TOP_K or prompt length.
 """
 
 from __future__ import annotations
