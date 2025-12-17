@@ -459,6 +459,7 @@ Notes:
 
 ### Retrieval Performance
 
+- Hybrid retrieval (BM25 + vector) for model/number/unit-heavy queries
 - Optional reranking (cross-encoder) for higher precision
 - FAISS/ANN alternative index for faster retrieval at scale
 - Quantized Phi-3 / llama.cpp backend for faster local inference
